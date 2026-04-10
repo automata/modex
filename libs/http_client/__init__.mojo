@@ -1,0 +1,19 @@
+"""Minimal HTTP/1.1 client over libc sockets.
+
+Pure Mojo — no Python interop. Uses FFI to libc for DNS resolution,
+TCP sockets, and HTTP/1.1 request/response handling.
+
+This module can be extracted and published as a standalone Mojo package.
+
+Example:
+    from http_client import HttpClient, HttpResponse
+
+    fn main() raises:
+        var client = HttpClient()
+        var response = client.get("http://example.com/")
+        print(response.status_code)
+        print(response.body)
+"""
+
+from .client import HttpClient
+from .response import HttpResponse
