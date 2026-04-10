@@ -2,24 +2,28 @@
 
 from .net import TcpSocket, resolve_host
 from .response import HttpResponse, parse_response
+from .tls import TlsSocket
 
 
 fn _parse_url(
     url: String,
+    mut scheme: String,
     mut host: String,
     mut port: String,
     mut path: String,
 ) raises:
-    """Parse 'http://host[:port]/path' into components."""
+    """Parse 'http[s]://host[:port]/path' into components."""
     var rest: String
 
     # Strip scheme
     if url.startswith("http://"):
+        scheme = "http"
         rest = String(url[7:])
     elif url.startswith("https://"):
-        raise Error("HTTPS not supported (no TLS). Use http://")
+        scheme = "https"
+        rest = String(url[8:])
     else:
-        raise Error("URL must start with http://")
+        raise Error("URL must start with http:// or https://")
 
     # Split host from path at first /
     var slash_pos = rest.find("/")
@@ -39,7 +43,7 @@ fn _parse_url(
         port = String(host_port[colon_pos + 1 :])
     else:
         host = host_port
-        port = "80"
+        port = "443" if scheme == "https" else "80"
 
 
 struct HttpClient:
@@ -77,15 +81,14 @@ struct HttpClient:
         content_type: String = "",
     ) raises -> HttpResponse:
         """Perform an HTTP request."""
+        var scheme = String()
         var host = String()
         var port = String()
         var path = String()
-        _parse_url(url, host, port, path)
+        _parse_url(url, scheme, host, port, path)
 
-        # Resolve & connect
+        # Resolve address
         var addr = resolve_host(host, port)
-        var sock = TcpSocket()
-        sock.connect(addr)
 
         # Build request
         var req = method + " " + path + " HTTP/1.1\r\n"
@@ -103,8 +106,17 @@ struct HttpClient:
             req += body
 
         # Send & receive
-        _ = sock.send_all(req)
-        var raw = sock.recv_all()
-        sock.close()
-
-        return parse_response(raw)
+        if scheme == "https":
+            var sock = TlsSocket()
+            sock.connect(host, addr)
+            _ = sock.send_all(req)
+            var raw = sock.recv_all()
+            sock.close()
+            return parse_response(raw)
+        else:
+            var sock = TcpSocket()
+            sock.connect(addr)
+            _ = sock.send_all(req)
+            var raw = sock.recv_all()
+            sock.close()
+            return parse_response(raw)
