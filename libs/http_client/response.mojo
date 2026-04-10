@@ -70,6 +70,11 @@ fn parse_response(raw: String) raises -> HttpResponse:
         else:
             _parse_header_line(line, resp)
 
+    # Decode chunked transfer encoding transparently.
+    var transfer_encoding = _get_header_ci(resp, "Transfer-Encoding")
+    if _contains_ascii_ci(transfer_encoding, "chunked"):
+        resp.body = _decode_chunked_body(resp.body)
+
     return resp^
 
 
@@ -111,3 +116,127 @@ fn _parse_header_line(line: String, mut resp: HttpResponse):
             val_start += 1
     var val = String(line[val_start:])
     resp.headers[key] = val
+
+
+fn _get_header_ci(resp: HttpResponse, wanted: String) -> String:
+    """Case-insensitive header lookup."""
+    for item in resp.headers.items():
+        if _eq_ascii_ci(item.key, wanted):
+            return item.value
+    return ""
+
+
+fn _eq_ascii_ci(a: String, b: String) -> Bool:
+    """ASCII-only case-insensitive string equality."""
+    if len(a) != len(b):
+        return False
+    var ab = a.as_bytes()
+    var bb = b.as_bytes()
+    for i in range(len(a)):
+        if _ascii_lower(ab[i]) != _ascii_lower(bb[i]):
+            return False
+    return True
+
+
+fn _contains_ascii_ci(haystack: String, needle: String) -> Bool:
+    """ASCII-only case-insensitive substring check."""
+    if len(needle) == 0:
+        return True
+    if len(haystack) < len(needle):
+        return False
+
+    var hb = haystack.as_bytes()
+    var nb = needle.as_bytes()
+    for start in range(len(haystack) - len(needle) + 1):
+        var ok = True
+        for i in range(len(needle)):
+            if _ascii_lower(hb[start + i]) != _ascii_lower(nb[i]):
+                ok = False
+                break
+        if ok:
+            return True
+    return False
+
+
+fn _ascii_lower(b: UInt8) -> UInt8:
+    if b >= UInt8(ord("A")) and b <= UInt8(ord("Z")):
+        return b + UInt8(32)
+    return b
+
+
+fn _trim_ascii_spaces(s: String) -> String:
+    """Trim ASCII spaces and tabs."""
+    if len(s) == 0:
+        return s
+
+    var b = s.as_bytes()
+    var start = 0
+    var stop = len(s)
+
+    while start < stop and (
+        b[start] == UInt8(ord(" ")) or b[start] == UInt8(ord("\t"))
+    ):
+        start += 1
+
+    while stop > start and (
+        b[stop - 1] == UInt8(ord(" ")) or b[stop - 1] == UInt8(ord("\t"))
+    ):
+        stop -= 1
+
+    return String(s[start:stop])
+
+
+fn _parse_chunk_size_hex(line: String) raises -> Int:
+    """Parse a chunk size line like '1a;ext=value'."""
+    var trimmed = _trim_ascii_spaces(line)
+    var semi = trimmed.find(";")
+    var hex_part = trimmed if semi < 0 else String(trimmed[:semi])
+
+    if len(hex_part) == 0:
+        raise Error("Malformed chunked body: empty chunk size")
+
+    var bytes = hex_part.as_bytes()
+    var value = 0
+    for i in range(len(hex_part)):
+        value *= 16
+        var c = bytes[i]
+        if c >= UInt8(ord("0")) and c <= UInt8(ord("9")):
+            value += Int(c - UInt8(ord("0")))
+        elif c >= UInt8(ord("a")) and c <= UInt8(ord("f")):
+            value += 10 + Int(c - UInt8(ord("a")))
+        elif c >= UInt8(ord("A")) and c <= UInt8(ord("F")):
+            value += 10 + Int(c - UInt8(ord("A")))
+        else:
+            raise Error("Malformed chunked body: invalid hex digit in chunk size")
+    return value
+
+
+fn _decode_chunked_body(body: String) raises -> String:
+    """Decode HTTP chunked transfer encoding."""
+    var out = String()
+    var pos = 0
+
+    while True:
+        var line_end = body.find("\r\n", pos)
+        if line_end < 0:
+            raise Error("Malformed chunked body: missing chunk size terminator")
+
+        var size_line = String(body[pos:line_end])
+        var chunk_size = _parse_chunk_size_hex(size_line)
+        pos = line_end + 2
+
+        if chunk_size == 0:
+            # Optional trailers follow; ignore them.
+            break
+
+        if pos + chunk_size > len(body):
+            raise Error("Malformed chunked body: chunk exceeds body length")
+
+        out += String(body[pos : pos + chunk_size])
+        pos += chunk_size
+
+        if pos + 2 > len(body) or String(body[pos : pos + 2]) != "\r\n":
+            raise Error("Malformed chunked body: missing CRLF after chunk data")
+        pos += 2
+
+    return out
