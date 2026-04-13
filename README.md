@@ -103,8 +103,8 @@ mojo repl
 
 ### OpenRouter streaming
 
-This experiment uses the native `http_client` + `sse` + `llm/openrouter`
-stack to stream a completion from OpenRouter.
+These experiments use the native `http_client` + `sse` + `llm/openrouter`
+stack to stream completions from OpenRouter.
 
 Set your API key:
 
@@ -112,13 +112,25 @@ Set your API key:
 export OPENROUTER_API_KEY=sk-or-...
 ```
 
-Run the experiment:
+Buffered streaming experiment:
 
 ```bash
 pixi run mojo run -I libs experiments/openrouter_stream.mojo
 ```
 
-Expected output: a short streamed response printed to the terminal.
+Live callback streaming experiment:
+
+```bash
+pixi run mojo run -I libs experiments/openrouter_stream_live.mojo
+```
+
+Tool-calling experiment (parses streamed tool-call deltas and assembles full tool calls):
+
+```bash
+pixi run mojo run -I libs experiments/openrouter_tool_calls.mojo
+```
+
+Expected output: a short streamed response or one or more parsed tool calls printed to the terminal.
 
 ### Other experiments
 
@@ -137,19 +149,32 @@ pixi run mojo run -I libs experiments/sse_parser.mojo
 
 ```
 modex/
-├── mojoproject.toml        # Project config, dependencies, tasks
+├── mojoproject.toml          # Project config, dependencies, tasks
 ├── src/
-│   └── main.mojo           # Entry point (imports from libs/)
-├── libs/                   # Reusable Mojo packages (each extractable)
-│   └── http_client/        # HTTP/1.1 client over libc sockets
-│       ├── __init__.mojo   # Package exports
-│       ├── client.mojo     # HttpClient high-level API
-│       ├── net.mojo        # Low-level socket FFI bindings
-│       └── response.mojo   # HTTP response parser
-├── experiments/            # Standalone experiments
-├── tests/                  # Tests (pixi run test)
-├── plan.md                 # Development roadmap
-└── README.md               # This file
+│   └── main.mojo             # Entry point (imports from libs/)
+├── libs/                     # Reusable Mojo packages (each extractable)
+│   ├── http_client/          # Native HTTP/HTTPS client over libc + OpenSSL
+│   │   ├── __init__.mojo     # Package exports
+│   │   ├── client.mojo       # HttpClient high-level API + SSE fetch helpers
+│   │   ├── net.mojo          # Low-level socket FFI bindings
+│   │   ├── response.mojo     # HTTP response parser + chunked decoding
+│   │   └── tls.mojo          # OpenSSL TLS socket
+│   ├── sse/                  # Incremental Server-Sent Events parser
+│   │   ├── __init__.mojo
+│   │   └── parser.mojo
+│   └── llm/                  # LLM provider clients
+│       ├── __init__.mojo
+│       └── openrouter.mojo   # OpenRouter streaming + tool-call parsing
+├── experiments/              # Standalone experiments
+│   ├── http_client.mojo
+│   ├── http_client_native.mojo
+│   ├── openrouter_stream.mojo
+│   ├── openrouter_stream_live.mojo
+│   ├── openrouter_tool_calls.mojo
+│   └── sse_parser.mojo
+├── tests/                    # Tests (pixi run test)
+├── plan.md                   # Development roadmap
+└── README.md                 # This file
 ```
 
 ### Extractable libraries
@@ -167,7 +192,7 @@ from http_client import HttpClient
 
 fn main() raises:
     var client = HttpClient()
-    var resp = client.get("http://example.com/")
+    var resp = client.get("https://example.com/")
     print(resp.status_code, resp.body)
 ```
 
@@ -194,8 +219,13 @@ Set your OpenRouter API key as an environment variable:
 export OPENROUTER_API_KEY=sk-or-...
 ```
 
-OpenRouter is the planned initial provider for modex. Additional direct
-providers may be added later — see [plan.md](plan.md).
+OpenRouter is the current initial provider for modex. It supports:
+- buffered streaming
+- live callback streaming
+- streamed tool-call parsing
+- tool-call assembly from partial streamed deltas
+
+Additional direct providers may be added later — see [plan.md](plan.md).
 
 ## License
 
