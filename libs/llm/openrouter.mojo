@@ -26,7 +26,7 @@ from http_client.net import TcpSocket, resolve_host
 from http_client.response import HttpResponse, get_header_ci, parse_response_head
 from http_client.tls import TlsSocket
 from sse import SseEvent, SseParser
-from tools import ReadTool, execute_read
+from tools import ToolDefinition, builtin_tool_definitions, execute_builtin_tool
 
 
 fn _parse_url(
@@ -240,24 +240,51 @@ struct OpenRouterClient:
         self.stream_messages_live(model, messages, on_chunk, empty_tools)
 
     fn run_with_read_tool(self, model: String, prompt: String, max_turns: Int = 4) raises -> String:
-        """Run a minimal multi-turn loop with the built-in `read` tool.
+        """Backward-compatible alias for the generic built-in tool loop."""
+        var defs = List[ToolDefinition]()
+        var all_defs = builtin_tool_definitions()
+        for d in all_defs:
+            if d.name == "read":
+                defs.append(d.copy())
+        return self.run_with_builtin_tools(model, prompt, defs, max_turns)
 
-        Flow:
-        1. Send user prompt + read tool schema
-        2. Collect streamed tool calls
-        3. Execute read tool for each assembled call
-        4. Send assistant tool_calls + tool results back to model
-        5. Repeat until model returns final text or max_turns is reached
+    fn run_with_default_builtin_tools(
+        self,
+        model: String,
+        prompt: String,
+        max_turns: Int = 6,
+    ) raises -> String:
+        """Run the generic loop with the default built-in tool set."""
+        var defs = builtin_tool_definitions()
+        return self.run_with_builtin_tools(model, prompt, defs, max_turns)
+
+    fn run_with_default_builtin_tools_live(
+        self,
+        model: String,
+        prompt: String,
+        on_chunk: fn(OpenRouterChunk) -> NoneType,
+        max_turns: Int = 6,
+    ) raises -> String:
+        """Live callback version of the default built-in tool loop."""
+        var defs = builtin_tool_definitions()
+        return self.run_with_builtin_tools_live(model, prompt, defs, on_chunk, max_turns)
+
+    fn run_with_builtin_tools(
+        self,
+        model: String,
+        prompt: String,
+        tool_defs: List[ToolDefinition],
+        max_turns: Int = 6,
+    ) raises -> String:
+        """Run a generic multi-turn loop with built-in tools.
+
+        This sends tool schemas, collects streamed tool calls, executes the
+        matching local tools, sends tool results back, and repeats until the
+        model returns final assistant text.
         """
-        var read_tool = ReadTool()
         var tools = List[OpenRouterToolSpec]()
-        tools.append(
-            OpenRouterToolSpec(
-                read_tool.name(),
-                read_tool.description(),
-                read_tool.parameters_json_schema(),
-            )
-        )
+        for d in tool_defs:
+            tools.append(OpenRouterToolSpec(d.name, d.description, d.parameters_json_schema))
 
         var py_messages = Python.list()
         var user_msg = Python.dict()
@@ -280,7 +307,6 @@ struct OpenRouterClient:
             if len(calls) == 0:
                 return _concat_text_deltas(chunks)
 
-            # Append assistant tool_calls message.
             var assistant_msg = Python.dict()
             assistant_msg["role"] = "assistant"
             assistant_msg["content"] = ""
@@ -298,7 +324,6 @@ struct OpenRouterClient:
             assistant_msg["tool_calls"] = py_tool_calls
             py_messages.append(assistant_msg)
 
-            # Execute tools and append tool result messages.
             for call in calls:
                 var tool_result = self._execute_tool_call(call)
                 var tool_msg = Python.dict()
@@ -307,7 +332,61 @@ struct OpenRouterClient:
                 tool_msg["content"] = tool_result
                 py_messages.append(tool_msg)
 
-        raise Error("run_with_read_tool exceeded max_turns without a final response")
+        raise Error("run_with_builtin_tools exceeded max_turns without a final response")
+
+    fn run_with_builtin_tools_live(
+        self,
+        model: String,
+        prompt: String,
+        tool_defs: List[ToolDefinition],
+        on_chunk: fn(OpenRouterChunk) -> NoneType,
+        max_turns: Int = 6,
+    ) raises -> String:
+        """Live callback version of the generic built-in tool loop."""
+        var tools = List[OpenRouterToolSpec]()
+        for d in tool_defs:
+            tools.append(OpenRouterToolSpec(d.name, d.description, d.parameters_json_schema))
+
+        var py_messages = Python.list()
+        var user_msg = Python.dict()
+        user_msg["role"] = "user"
+        user_msg["content"] = prompt
+        py_messages.append(user_msg)
+
+        for _turn in range(max_turns):
+            var payload = self._build_payload_from_py_messages(model, py_messages, tools)
+            var chunks = self._stream_payload_live_collect(payload, on_chunk)
+            var calls = assemble_tool_calls(chunks)
+
+            if len(calls) == 0:
+                return _concat_text_deltas(chunks)
+
+            var assistant_msg = Python.dict()
+            assistant_msg["role"] = "assistant"
+            assistant_msg["content"] = ""
+            var py_tool_calls = Python.list()
+            for call in calls:
+                var function_obj = Python.dict()
+                function_obj["name"] = call.function_name
+                function_obj["arguments"] = call.arguments
+
+                var tool_call_obj = Python.dict()
+                tool_call_obj["id"] = call.id
+                tool_call_obj["type"] = "function"
+                tool_call_obj["function"] = function_obj
+                py_tool_calls.append(tool_call_obj)
+            assistant_msg["tool_calls"] = py_tool_calls
+            py_messages.append(assistant_msg)
+
+            for call in calls:
+                var tool_result = self._execute_tool_call(call)
+                var tool_msg = Python.dict()
+                tool_msg["role"] = "tool"
+                tool_msg["tool_call_id"] = call.id
+                tool_msg["content"] = tool_result
+                py_messages.append(tool_msg)
+
+        raise Error("run_with_builtin_tools_live exceeded max_turns without a final response")
 
     fn stream_text_with_tools_live(
         self,
@@ -508,26 +587,10 @@ struct OpenRouterClient:
                 return result^
 
     fn _execute_tool_call(self, call: OpenRouterToolCall) raises -> String:
-        if call.function_name != "read":
-            return "Error: unsupported tool: " + call.function_name
-
         try:
-            var py_json = Python.import_module("json")
-            var args = py_json.loads(call.arguments)
-            var path = String(args.get("path", ""))
-            var offset = 1
-            var limit = 2000
-            try:
-                offset = Int(py=args.get("offset", 1))
-            except:
-                pass
-            try:
-                limit = Int(py=args.get("limit", 2000))
-            except:
-                pass
-            return execute_read(path, offset, limit)
+            return execute_builtin_tool(call.function_name, call.arguments)
         except e:
-            return "Error executing read tool: " + String(e)
+            return "Error executing tool '" + call.function_name + "': " + String(e)
 
     fn _build_payload(
         self,
@@ -581,6 +644,104 @@ struct OpenRouterClient:
 
         return String(py_json.dumps(payload))
 
+    fn _stream_payload_live_collect(
+        self,
+        payload: String,
+        on_chunk: fn(OpenRouterChunk) -> NoneType,
+    ) raises -> List[OpenRouterChunk]:
+        var headers = self._build_headers()
+        var url = self.base_url + "/chat/completions"
+
+        var scheme = String()
+        var host = String()
+        var port = String()
+        var path = String()
+        _parse_url(url, scheme, host, port, path)
+
+        var addr = resolve_host(host, port)
+        var req = self._build_request(host, path, payload, headers)
+        var parser = SseParser()
+        var collected = List[OpenRouterChunk]()
+
+        if scheme == "https":
+            var sock = TlsSocket()
+            sock.connect(host, addr)
+            _ = sock.send_all(req)
+            var headers_and_rest = self._read_headers_tls(sock)
+            var response_head = parse_response_head(headers_and_rest[0])
+            if response_head.status_code < 200 or response_head.status_code >= 300:
+                sock.close()
+                raise Error("OpenRouter returned HTTP " + String(response_head.status_code))
+            self._consume_stream_tls_collect(sock, response_head, headers_and_rest[1], parser, on_chunk, collected)
+            sock.close()
+        else:
+            var sock = TcpSocket()
+            sock.connect(addr)
+            _ = sock.send_all(req)
+            var headers_and_rest = self._read_headers_tcp(sock)
+            var response_head = parse_response_head(headers_and_rest[0])
+            if response_head.status_code < 200 or response_head.status_code >= 300:
+                sock.close()
+                raise Error("OpenRouter returned HTTP " + String(response_head.status_code))
+            self._consume_stream_tcp_collect(sock, response_head, headers_and_rest[1], parser, on_chunk, collected)
+            sock.close()
+
+        return collected^
+
+    fn _consume_stream_tls_collect(
+        self,
+        sock: TlsSocket,
+        response_head: HttpResponse,
+        initial_body: String,
+        mut parser: SseParser,
+        on_chunk: fn(OpenRouterChunk) -> NoneType,
+        mut collected: List[OpenRouterChunk],
+    ) raises:
+        var te = get_header_ci(response_head, "Transfer-Encoding")
+        if _contains_ascii_ci(te, "chunked"):
+            var decoder = ChunkedStreamDecoder()
+            self._emit_and_collect_from_sse_data(parser.feed(decoder.feed(initial_body)), on_chunk, collected)
+            while not decoder.done:
+                var chunk = sock.recv(4096)
+                if len(chunk) == 0:
+                    break
+                self._emit_and_collect_from_sse_data(parser.feed(decoder.feed(chunk)), on_chunk, collected)
+        else:
+            self._emit_and_collect_from_sse_data(parser.feed(initial_body), on_chunk, collected)
+            while True:
+                var chunk = sock.recv(4096)
+                if len(chunk) == 0:
+                    break
+                self._emit_and_collect_from_sse_data(parser.feed(chunk), on_chunk, collected)
+        self._emit_and_collect_from_sse_data(parser.finish(), on_chunk, collected)
+
+    fn _consume_stream_tcp_collect(
+        self,
+        sock: TcpSocket,
+        response_head: HttpResponse,
+        initial_body: String,
+        mut parser: SseParser,
+        on_chunk: fn(OpenRouterChunk) -> NoneType,
+        mut collected: List[OpenRouterChunk],
+    ) raises:
+        var te = get_header_ci(response_head, "Transfer-Encoding")
+        if _contains_ascii_ci(te, "chunked"):
+            var decoder = ChunkedStreamDecoder()
+            self._emit_and_collect_from_sse_data(parser.feed(decoder.feed(initial_body)), on_chunk, collected)
+            while not decoder.done:
+                var chunk = sock.recv(4096)
+                if len(chunk) == 0:
+                    break
+                self._emit_and_collect_from_sse_data(parser.feed(decoder.feed(chunk)), on_chunk, collected)
+        else:
+            self._emit_and_collect_from_sse_data(parser.feed(initial_body), on_chunk, collected)
+            while True:
+                var chunk = sock.recv(4096)
+                if len(chunk) == 0:
+                    break
+                self._emit_and_collect_from_sse_data(parser.feed(chunk), on_chunk, collected)
+        self._emit_and_collect_from_sse_data(parser.finish(), on_chunk, collected)
+
     fn _emit_from_sse_data(
         self,
         events: List[SseEvent],
@@ -590,6 +751,18 @@ struct OpenRouterClient:
             var parsed = self._parse_event_chunks(event)
             for chunk in parsed:
                 on_chunk(chunk)
+
+    fn _emit_and_collect_from_sse_data(
+        self,
+        events: List[SseEvent],
+        on_chunk: fn(OpenRouterChunk) -> NoneType,
+        mut collected: List[OpenRouterChunk],
+    ) raises:
+        for event in events:
+            var parsed = self._parse_event_chunks(event)
+            for chunk in parsed:
+                on_chunk(chunk)
+                collected.append(chunk.copy())
 
     fn _parse_stream(self, events: List[SseEvent]) raises -> List[OpenRouterChunk]:
         """Parse OpenRouter/OpenAI-compatible SSE events into chunks."""
