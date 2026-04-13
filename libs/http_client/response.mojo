@@ -198,6 +198,32 @@ fn _trim_ascii_spaces(s: String) -> String:
     return String(s[start:stop])
 
 
+fn _find_chunk_line_end(buffer: String, start: Int) -> Dict[Int, Int]:
+    var info = Dict[Int, Int]()
+    var rel_crlf = String(buffer[start:]).find("\r\n")
+    var rel_lf = String(buffer[start:]).find("\n")
+
+    if rel_crlf >= 0 and (rel_lf < 0 or rel_crlf <= rel_lf):
+        info[0] = start + rel_crlf
+        info[1] = 2
+        return info^
+    if rel_lf >= 0:
+        info[0] = start + rel_lf
+        info[1] = 1
+        return info^
+    return info^
+
+
+fn _chunk_data_terminator_len(buffer: String, pos: Int) -> Int:
+    if pos + 2 <= len(buffer):
+        if String(buffer[pos : pos + 2]) == "\r\n":
+            return 2
+    if pos + 1 <= len(buffer):
+        if String(buffer[pos : pos + 1]) == "\n":
+            return 1
+    return 0
+
+
 fn _parse_chunk_size_hex(line: String) raises -> Int:
     """Parse a chunk size line like '1a;ext=value'."""
     var trimmed = _trim_ascii_spaces(line)
@@ -224,18 +250,23 @@ fn _parse_chunk_size_hex(line: String) raises -> Int:
 
 
 fn _decode_chunked_body(body: String) raises -> String:
-    """Decode HTTP chunked transfer encoding."""
+    """Decode HTTP chunked transfer encoding.
+
+    Tolerates both CRLF and bare LF chunk framing line endings.
+    """
     var out = String()
     var pos = 0
 
     while True:
-        var line_end = body.find("\r\n", pos)
-        if line_end < 0:
+        var line_info = _find_chunk_line_end(body, pos)
+        if len(line_info) == 0:
             raise Error("Malformed chunked body: missing chunk size terminator")
 
+        var line_end = line_info[0]
+        var term_len = line_info[1]
         var size_line = String(body[pos:line_end])
         var chunk_size = _parse_chunk_size_hex(size_line)
-        pos = line_end + 2
+        pos = line_end + term_len
 
         if chunk_size == 0:
             # Optional trailers follow; ignore them.
@@ -247,8 +278,9 @@ fn _decode_chunked_body(body: String) raises -> String:
         out += String(body[pos : pos + chunk_size])
         pos += chunk_size
 
-        if pos + 2 > len(body) or String(body[pos : pos + 2]) != "\r\n":
-            raise Error("Malformed chunked body: missing CRLF after chunk data")
-        pos += 2
+        var data_term_len = _chunk_data_terminator_len(body, pos)
+        if data_term_len == 0:
+            raise Error("Malformed chunked body: missing line ending after chunk data")
+        pos += data_term_len
 
     return out

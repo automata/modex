@@ -1,5 +1,6 @@
 """Minimal edit tool using exact text replacement."""
 
+from json import parse_json
 from python import Python
 
 
@@ -37,7 +38,6 @@ struct EditTool:
 
 
 fn execute_edit(path: String, edits_json: String) raises -> String:
-    var py_json = Python.import_module("json")
     var py_os = Python.import_module("os")
     var py_builtins = Python.import_module("builtins")
 
@@ -49,11 +49,12 @@ fn execute_edit(path: String, edits_json: String) raises -> String:
     var abs_path = clean_path if py_os.path.isabs(clean_path) else String(py_os.path.join(cwd, clean_path))
     var content = String(py_builtins.open(abs_path, "r", encoding="utf-8", errors="replace").read())
 
-    var edits = py_json.loads(edits_json)
-    for i in range(Int(py=edits.__len__())):
-        var edit = edits[i]
-        var old_text = String(edit.get("oldText", ""))
-        var new_text = String(edit.get("newText", ""))
+    var edits = parse_json(edits_json)
+    var edit_count = edits.len()
+    for i in range(edit_count):
+        var edit = edits.item(i)
+        var old_text = edit.get("oldText").as_string()
+        var new_text = edit.get("newText").as_string()
         var occurrences = Int(py=content.count(old_text))
         if occurrences != 1:
             return "Error: oldText must match exactly once for edit " + String(i) + ", found " + String(occurrences)
@@ -63,4 +64,4 @@ fn execute_edit(path: String, edits_json: String) raises -> String:
     var f = py_builtins.open(abs_path, "w", encoding="utf-8")
     f.write(content)
     f.close()
-    return "Applied " + String(Int(py=edits.__len__())) + " edits to " + clean_path
+    return "Applied " + String(edit_count) + " edits to " + clean_path

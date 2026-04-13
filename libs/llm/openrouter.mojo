@@ -1,7 +1,6 @@
 """OpenRouter streaming client.
 
-Uses the native `http_client` + `sse` stack for HTTPS + SSE transport and
-Python interop only for JSON parsing/serialization.
+Uses the native `http_client` + `sse` + `json` stack for HTTPS, SSE, and JSON.
 
 Environment:
     OPENROUTER_API_KEY
@@ -18,15 +17,18 @@ Example:
 
 from collections import List
 from os import getenv
-from python import Python, PythonObject
 
 from http_client import HttpClient, HttpHeader
 from http_client.client import ChunkedStreamDecoder
 from http_client.net import TcpSocket, resolve_host
 from http_client.response import HttpResponse, get_header_ci, parse_response_head
 from http_client.tls import TlsSocket
+from json import JsonArrayBuilder, JsonObjectBuilder, parse_json, json_quote
 from sse import SseEvent, SseParser
 from tools import ToolDefinition, builtin_tool_definitions, execute_builtin_tool
+
+from .history import SessionHistory, SessionMessage
+from .types import OpenRouterChunk, OpenRouterToolCall, OpenRouterToolSpec
 
 
 fn _parse_url(
@@ -86,98 +88,6 @@ fn _contains_ascii_ci(haystack: String, needle: String) -> Bool:
         if ok:
             return True
     return False
-
-
-struct OpenRouterToolSpec(Copyable):
-    """A function tool definition for OpenRouter/OpenAI-compatible APIs."""
-
-    var name: String
-    var description: String
-    var parameters_json_schema: String
-
-    fn __init__(out self):
-        self.name = ""
-        self.description = ""
-        self.parameters_json_schema = "{}"
-
-    fn __init__(
-        out self,
-        name: String,
-        description: String,
-        parameters_json_schema: String,
-    ):
-        self.name = name
-        self.description = description
-        self.parameters_json_schema = parameters_json_schema
-
-
-struct OpenRouterToolCall(Copyable):
-    """A streamed or assembled tool call."""
-
-    var index: Int
-    var id: String
-    var function_name: String
-    var arguments: String
-
-    fn __init__(out self):
-        self.index = -1
-        self.id = ""
-        self.function_name = ""
-        self.arguments = ""
-
-    fn __init__(
-        out self,
-        index: Int,
-        id: String = "",
-        function_name: String = "",
-        arguments: String = "",
-    ):
-        self.index = index
-        self.id = id
-        self.function_name = function_name
-        self.arguments = arguments
-
-
-struct OpenRouterChunk(Copyable):
-    """One streamed chunk from OpenRouter."""
-
-    var delta: String
-    var finish_reason: String
-    var raw_json: String
-    var tool_call_index: Int
-    var tool_call_id: String
-    var tool_call_name: String
-    var tool_call_arguments: String
-
-    fn __init__(out self):
-        self.delta = ""
-        self.finish_reason = ""
-        self.raw_json = ""
-        self.tool_call_index = -1
-        self.tool_call_id = ""
-        self.tool_call_name = ""
-        self.tool_call_arguments = ""
-
-    fn __init__(
-        out self,
-        delta: String,
-        finish_reason: String = "",
-        raw_json: String = "",
-        tool_call_index: Int = -1,
-        tool_call_id: String = "",
-        tool_call_name: String = "",
-        tool_call_arguments: String = "",
-    ):
-        self.delta = delta
-        self.finish_reason = finish_reason
-        self.raw_json = raw_json
-        self.tool_call_index = tool_call_index
-        self.tool_call_id = tool_call_id
-        self.tool_call_name = tool_call_name
-        self.tool_call_arguments = tool_call_arguments
-
-    fn has_tool_call(self) -> Bool:
-        return self.tool_call_index >= 0
 
 
 struct OpenRouterClient:
@@ -286,14 +196,11 @@ struct OpenRouterClient:
         for d in tool_defs:
             tools.append(OpenRouterToolSpec(d.name, d.description, d.parameters_json_schema))
 
-        var py_messages = Python.list()
-        var user_msg = Python.dict()
-        user_msg["role"] = "user"
-        user_msg["content"] = prompt
-        py_messages.append(user_msg)
+        var history = SessionHistory()
+        history.append_user(prompt)
 
         for _turn in range(max_turns):
-            var payload = self._build_payload_from_py_messages(model, py_messages, tools)
+            var payload = self._build_payload_from_history(model, history, tools)
             var headers = self._build_headers()
             var events = self.http.post_sse(
                 self.base_url + "/chat/completions",
@@ -307,30 +214,11 @@ struct OpenRouterClient:
             if len(calls) == 0:
                 return _concat_text_deltas(chunks)
 
-            var assistant_msg = Python.dict()
-            assistant_msg["role"] = "assistant"
-            assistant_msg["content"] = ""
-            var py_tool_calls = Python.list()
-            for call in calls:
-                var function_obj = Python.dict()
-                function_obj["name"] = call.function_name
-                function_obj["arguments"] = call.arguments
-
-                var tool_call_obj = Python.dict()
-                tool_call_obj["id"] = call.id
-                tool_call_obj["type"] = "function"
-                tool_call_obj["function"] = function_obj
-                py_tool_calls.append(tool_call_obj)
-            assistant_msg["tool_calls"] = py_tool_calls
-            py_messages.append(assistant_msg)
+            history.append_assistant_tool_calls(calls)
 
             for call in calls:
                 var tool_result = self._execute_tool_call(call)
-                var tool_msg = Python.dict()
-                tool_msg["role"] = "tool"
-                tool_msg["tool_call_id"] = call.id
-                tool_msg["content"] = tool_result
-                py_messages.append(tool_msg)
+                history.append_tool_result(call.id, tool_result)
 
         raise Error("run_with_builtin_tools exceeded max_turns without a final response")
 
@@ -347,44 +235,22 @@ struct OpenRouterClient:
         for d in tool_defs:
             tools.append(OpenRouterToolSpec(d.name, d.description, d.parameters_json_schema))
 
-        var py_messages = Python.list()
-        var user_msg = Python.dict()
-        user_msg["role"] = "user"
-        user_msg["content"] = prompt
-        py_messages.append(user_msg)
+        var history = SessionHistory()
+        history.append_user(prompt)
 
         for _turn in range(max_turns):
-            var payload = self._build_payload_from_py_messages(model, py_messages, tools)
+            var payload = self._build_payload_from_history(model, history, tools)
             var chunks = self._stream_payload_live_collect(payload, on_chunk)
             var calls = assemble_tool_calls(chunks)
 
             if len(calls) == 0:
                 return _concat_text_deltas(chunks)
 
-            var assistant_msg = Python.dict()
-            assistant_msg["role"] = "assistant"
-            assistant_msg["content"] = ""
-            var py_tool_calls = Python.list()
-            for call in calls:
-                var function_obj = Python.dict()
-                function_obj["name"] = call.function_name
-                function_obj["arguments"] = call.arguments
-
-                var tool_call_obj = Python.dict()
-                tool_call_obj["id"] = call.id
-                tool_call_obj["type"] = "function"
-                tool_call_obj["function"] = function_obj
-                py_tool_calls.append(tool_call_obj)
-            assistant_msg["tool_calls"] = py_tool_calls
-            py_messages.append(assistant_msg)
+            history.append_assistant_tool_calls(calls)
 
             for call in calls:
                 var tool_result = self._execute_tool_call(call)
-                var tool_msg = Python.dict()
-                tool_msg["role"] = "tool"
-                tool_msg["tool_call_id"] = call.id
-                tool_msg["content"] = tool_result
-                py_messages.append(tool_msg)
+                history.append_tool_result(call.id, tool_result)
 
         raise Error("run_with_builtin_tools_live exceeded max_turns without a final response")
 
@@ -599,50 +465,26 @@ struct OpenRouterClient:
         system_prompt: String,
         tools: List[OpenRouterToolSpec],
     ) raises -> String:
-        var py_messages = Python.list()
-
+        var history = SessionHistory()
         if len(system_prompt) > 0:
-            var system_msg = Python.dict()
-            system_msg["role"] = "system"
-            system_msg["content"] = system_prompt
-            py_messages.append(system_msg)
-
+            history.append_system(system_prompt)
         for message in user_messages:
-            var user_msg = Python.dict()
-            user_msg["role"] = "user"
-            user_msg["content"] = message
-            py_messages.append(user_msg)
+            history.append_user(message)
+        return self._build_payload_from_history(model, history, tools)
 
-        return self._build_payload_from_py_messages(model, py_messages, tools)
-
-    fn _build_payload_from_py_messages(
+    fn _build_payload_from_history(
         self,
         model: String,
-        py_messages: PythonObject,
+        history: SessionHistory,
         tools: List[OpenRouterToolSpec],
     ) raises -> String:
-        var py_json = Python.import_module("json")
-        var payload = Python.dict()
-        payload["model"] = model
-        payload["messages"] = py_messages
-        payload["stream"] = True
-
+        var payload = JsonObjectBuilder()
+        payload.add_string("model", model)
+        payload.add_raw("messages", _history_to_messages_json(history))
+        payload.add_bool("stream", True)
         if len(tools) > 0:
-            var py_tools = Python.list()
-            for tool in tools:
-                var function_obj = Python.dict()
-                function_obj["name"] = tool.name
-                function_obj["description"] = tool.description
-                function_obj["parameters"] = py_json.loads(tool.parameters_json_schema)
-
-                var tool_obj = Python.dict()
-                tool_obj["type"] = "function"
-                tool_obj["function"] = function_obj
-                py_tools.append(tool_obj)
-
-            payload["tools"] = py_tools
-
-        return String(py_json.dumps(payload))
+            payload.add_raw("tools", _tools_to_json(tools))
+        return payload.finish()
 
     fn _stream_payload_live_collect(
         self,
@@ -785,48 +627,60 @@ struct OpenRouterClient:
         if len(event.data) == 0 or event.data == "[DONE]":
             return out^
 
-        var py_json = Python.import_module("json")
         try:
-            var obj = py_json.loads(event.data)
-            var choices = obj.get("choices", Python.list())
-            if len(choices) == 0:
+            var obj = parse_json(event.data)
+            var choices = obj.get("choices")
+            if choices.is_missing() or choices.len() == 0:
                 return out^
 
-            var choice0 = choices[0]
-            var delta_obj = choice0.get("delta", Python.dict())
-            var text_delta = String(delta_obj.get("content", ""))
+            var choice0 = choices.item(0)
+            var delta_obj = choice0.get("delta")
 
-            var finish_reason: String
-            try:
-                finish_reason = String(choice0.get("finish_reason", ""))
-                if finish_reason == "None":
-                    finish_reason = ""
-            except:
-                finish_reason = ""
+            var text_delta = String()
+            var content = delta_obj.get("content")
+            if not content.is_missing() and content.kind() == "string":
+                text_delta = content.as_string()
+
+            var finish_reason = String()
+            var finish = choice0.get("finish_reason")
+            if not finish.is_missing() and not finish.is_null() and finish.kind() == "string":
+                finish_reason = finish.as_string()
 
             if len(text_delta) > 0 or len(finish_reason) > 0:
                 out.append(OpenRouterChunk(text_delta, finish_reason, event.data))
 
-            var tool_calls = choice0.get("delta", Python.dict()).get("tool_calls", Python.list())
-            var tool_call_count = Int(py=tool_calls.__len__())
-            for i in range(tool_call_count):
-                var tool_call = tool_calls[i]
-                var index = Int(py=tool_call.get("index", 0))
-                var id = String(tool_call.get("id", ""))
-                var function_obj = tool_call.get("function", Python.dict())
-                var function_name = String(function_obj.get("name", ""))
-                var arguments = String(function_obj.get("arguments", ""))
-                out.append(
-                    OpenRouterChunk(
-                        "",
-                        finish_reason,
-                        event.data,
-                        index,
-                        id,
-                        function_name,
-                        arguments,
+            var tool_calls = delta_obj.get("tool_calls")
+            if not tool_calls.is_missing() and tool_calls.kind() == "array":
+                for i in range(tool_calls.len()):
+                    var tool_call = tool_calls.item(i)
+                    var index = 0
+                    var index_val = tool_call.get("index")
+                    if not index_val.is_missing():
+                        index = index_val.as_int()
+                    var id = String()
+                    var id_val = tool_call.get("id")
+                    if not id_val.is_missing() and id_val.kind() == "string":
+                        id = id_val.as_string()
+                    var function_obj = tool_call.get("function")
+                    var function_name = String()
+                    var fn_name_val = function_obj.get("name")
+                    if not fn_name_val.is_missing() and fn_name_val.kind() == "string":
+                        function_name = fn_name_val.as_string()
+                    var arguments = String()
+                    var args_val = function_obj.get("arguments")
+                    if not args_val.is_missing() and args_val.kind() == "string":
+                        arguments = args_val.as_string()
+                    out.append(
+                        OpenRouterChunk(
+                            "",
+                            finish_reason,
+                            event.data,
+                            index,
+                            id,
+                            function_name,
+                            arguments,
+                        )
                     )
-                )
         except:
             pass
 
@@ -875,3 +729,55 @@ fn _concat_text_deltas(chunks: List[OpenRouterChunk]) -> String:
         if len(chunk.delta) > 0:
             out += chunk.delta
     return out
+
+
+fn _tool_call_to_json(call: OpenRouterToolCall) -> String:
+    var function_obj = JsonObjectBuilder()
+    function_obj.add_string("name", call.function_name)
+    function_obj.add_string("arguments", call.arguments)
+
+    var tool_call_obj = JsonObjectBuilder()
+    tool_call_obj.add_string("id", call.id)
+    tool_call_obj.add_string("type", "function")
+    tool_call_obj.add_raw("function", function_obj.finish())
+    return tool_call_obj.finish()
+
+
+fn _message_to_json(msg: SessionMessage) -> String:
+    var obj = JsonObjectBuilder()
+    obj.add_string("role", msg.role)
+    if msg.role == "assistant":
+        obj.add_string("content", msg.content)
+        if len(msg.tool_calls) > 0:
+            var arr = JsonArrayBuilder()
+            for call in msg.tool_calls:
+                arr.add_raw(_tool_call_to_json(call))
+            obj.add_raw("tool_calls", arr.finish())
+    elif msg.role == "tool":
+        obj.add_string("tool_call_id", msg.tool_call_id)
+        obj.add_string("content", msg.content)
+    else:
+        obj.add_string("content", msg.content)
+    return obj.finish()
+
+
+fn _history_to_messages_json(history: SessionHistory) -> String:
+    var arr = JsonArrayBuilder()
+    for msg in history.messages:
+        arr.add_raw(_message_to_json(msg))
+    return arr.finish()
+
+
+fn _tools_to_json(tools: List[OpenRouterToolSpec]) -> String:
+    var arr = JsonArrayBuilder()
+    for tool in tools:
+        var function_obj = JsonObjectBuilder()
+        function_obj.add_string("name", tool.name)
+        function_obj.add_string("description", tool.description)
+        function_obj.add_raw("parameters", tool.parameters_json_schema)
+
+        var tool_obj = JsonObjectBuilder()
+        tool_obj.add_string("type", "function")
+        tool_obj.add_raw("function", function_obj.finish())
+        arr.add_raw(tool_obj.finish())
+    return arr.finish()

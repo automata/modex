@@ -1,7 +1,7 @@
 """Generic tool definitions and built-in tool dispatch."""
 
 from collections import List
-from python import Python
+from json import parse_json
 
 from .bash import BashTool, execute_bash
 from .edit import EditTool, execute_edit
@@ -74,41 +74,51 @@ fn builtin_tool_definitions() -> List[ToolDefinition]:
 
 fn execute_builtin_tool(name: String, arguments_json: String) raises -> String:
     """Execute a built-in tool using a JSON arguments string."""
-    var py_json = Python.import_module("json")
-    var args = py_json.loads(arguments_json)
+    var args = parse_json(arguments_json)
 
     if name == "read":
-        var path = String(args.get("path", ""))
+        var path = String()
+        var path_val = args.get("path")
+        if not path_val.is_missing():
+            path = path_val.as_string()
         var offset = 1
+        var offset_val = args.get("offset")
+        if not offset_val.is_missing():
+            offset = offset_val.as_int()
         var limit = 2000
-        try:
-            offset = Int(py=args.get("offset", 1))
-        except:
-            pass
-        try:
-            limit = Int(py=args.get("limit", 2000))
-        except:
-            pass
+        var limit_val = args.get("limit")
+        if not limit_val.is_missing():
+            limit = limit_val.as_int()
         return execute_read(path, offset, limit)
 
     if name == "write":
-        var path = String(args.get("path", ""))
-        var content = String(args.get("content", ""))
+        var path = String()
+        var path_val = args.get("path")
+        if not path_val.is_missing():
+            path = path_val.as_string()
+        var content = String()
+        var content_val = args.get("content")
+        if not content_val.is_missing():
+            content = content_val.as_string()
         return execute_write(path, content)
 
     if name == "edit":
-        var path = String(args.get("path", ""))
-        var edits_py = args.get("edits", Python.list())
-        var edits_json = String(py_json.dumps(edits_py))
-        return execute_edit(path, edits_json)
+        var path = String()
+        var path_val = args.get("path")
+        if not path_val.is_missing():
+            path = path_val.as_string()
+        var edits_val = args.get("edits")
+        return execute_edit(path, edits_val.raw)
 
     if name == "bash":
-        var command = String(args.get("command", ""))
+        var command = String()
+        var cmd_val = args.get("command")
+        if not cmd_val.is_missing():
+            command = cmd_val.as_string()
         var timeout = 0
-        try:
-            timeout = Int(py=args.get("timeout", 0))
-        except:
-            pass
+        var timeout_val = args.get("timeout")
+        if not timeout_val.is_missing():
+            timeout = timeout_val.as_int()
         return execute_bash(command, timeout)
 
     return "Error: unsupported tool: " + name
