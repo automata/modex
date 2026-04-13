@@ -47,7 +47,26 @@ fn parse_response(raw: String) raises -> HttpResponse:
     var header_section = String(raw[:header_end])
     resp.body = String(raw[header_end + 4 :])
 
-    # Split header section into lines on \r\n
+    _parse_head_into_resp(header_section, resp)
+
+    # Decode chunked transfer encoding transparently.
+    var transfer_encoding = get_header_ci(resp, "Transfer-Encoding")
+    if len(resp.body) > 0 and _contains_ascii_ci(transfer_encoding, "chunked"):
+        resp.body = _decode_chunked_body(resp.body)
+
+    return resp^
+
+
+fn parse_response_head(header_section: String) raises -> HttpResponse:
+    """Parse only status line + headers, without a body."""
+    var resp = HttpResponse()
+    resp.raw = header_section
+    _parse_head_into_resp(header_section, resp)
+    return resp^
+
+
+fn _parse_head_into_resp(header_section: String, mut resp: HttpResponse):
+    """Parse response status line and headers into resp."""
     var pos = 0
     var first_line = True
 
@@ -69,13 +88,6 @@ fn parse_response(raw: String) raises -> HttpResponse:
             first_line = False
         else:
             _parse_header_line(line, resp)
-
-    # Decode chunked transfer encoding transparently.
-    var transfer_encoding = _get_header_ci(resp, "Transfer-Encoding")
-    if _contains_ascii_ci(transfer_encoding, "chunked"):
-        resp.body = _decode_chunked_body(resp.body)
-
-    return resp^
 
 
 fn _parse_status_line(line: String, mut resp: HttpResponse):
@@ -118,7 +130,7 @@ fn _parse_header_line(line: String, mut resp: HttpResponse):
     resp.headers[key] = val
 
 
-fn _get_header_ci(resp: HttpResponse, wanted: String) -> String:
+fn get_header_ci(resp: HttpResponse, wanted: String) -> String:
     """Case-insensitive header lookup."""
     for item in resp.headers.items():
         if _eq_ascii_ci(item.key, wanted):

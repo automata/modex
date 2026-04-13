@@ -15,5 +15,5 @@ Example:
         print(response.body)
 """
 
-from .client import HttpClient
+from .client import HttpClient, HttpHeader
 from .response import HttpResponse

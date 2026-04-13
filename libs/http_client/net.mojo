@@ -102,9 +102,14 @@ fn make_c_str(s: String) -> UnsafePointer[mut=True, c_char, MutExternalOrigin]:
 
 
 fn resolve_host(host: String, port: String) raises -> sockaddr_in:
-    """Resolve hostname to sockaddr_in via getaddrinfo."""
+    """Resolve hostname to IPv4 sockaddr_in via getaddrinfo.
+
+    Note: for now we force AF_INET because the current socket layer only
+    implements sockaddr_in / IPv4. Hosts like openrouter.ai often resolve to
+    IPv6 first, which would otherwise be miscast and cause connect() failures.
+    """
     var hints = addrinfo()
-    hints.ai_family = AF_UNSPEC
+    hints.ai_family = AF_INET
     hints.ai_socktype = SOCK_STREAM
     hints.ai_protocol = IPPROTO_TCP
 
