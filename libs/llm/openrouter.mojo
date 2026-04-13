@@ -87,27 +87,96 @@ fn _contains_ascii_ci(haystack: String, needle: String) -> Bool:
     return False
 
 
+struct OpenRouterToolSpec(Copyable):
+    """A function tool definition for OpenRouter/OpenAI-compatible APIs."""
+
+    var name: String
+    var description: String
+    var parameters_json_schema: String
+
+    fn __init__(out self):
+        self.name = ""
+        self.description = ""
+        self.parameters_json_schema = "{}"
+
+    fn __init__(
+        out self,
+        name: String,
+        description: String,
+        parameters_json_schema: String,
+    ):
+        self.name = name
+        self.description = description
+        self.parameters_json_schema = parameters_json_schema
+
+
+struct OpenRouterToolCall(Copyable):
+    """A streamed or assembled tool call."""
+
+    var index: Int
+    var id: String
+    var function_name: String
+    var arguments: String
+
+    fn __init__(out self):
+        self.index = -1
+        self.id = ""
+        self.function_name = ""
+        self.arguments = ""
+
+    fn __init__(
+        out self,
+        index: Int,
+        id: String = "",
+        function_name: String = "",
+        arguments: String = "",
+    ):
+        self.index = index
+        self.id = id
+        self.function_name = function_name
+        self.arguments = arguments
+
+
 struct OpenRouterChunk(Copyable):
     """One streamed chunk from OpenRouter."""
 
     var delta: String
     var finish_reason: String
     var raw_json: String
+    var tool_call_index: Int
+    var tool_call_id: String
+    var tool_call_name: String
+    var tool_call_arguments: String
 
     fn __init__(out self):
         self.delta = ""
         self.finish_reason = ""
         self.raw_json = ""
+        self.tool_call_index = -1
+        self.tool_call_id = ""
+        self.tool_call_name = ""
+        self.tool_call_arguments = ""
 
     fn __init__(
         out self,
         delta: String,
         finish_reason: String = "",
         raw_json: String = "",
+        tool_call_index: Int = -1,
+        tool_call_id: String = "",
+        tool_call_name: String = "",
+        tool_call_arguments: String = "",
     ):
         self.delta = delta
         self.finish_reason = finish_reason
         self.raw_json = raw_json
+        self.tool_call_index = tool_call_index
+        self.tool_call_id = tool_call_id
+        self.tool_call_name = tool_call_name
+        self.tool_call_arguments = tool_call_arguments
+
+    fn has_tool_call(self) -> Bool:
+        return self.tool_call_index >= 0
 
 
 struct OpenRouterClient:
@@ -146,6 +215,17 @@ struct OpenRouterClient:
         messages.append(prompt)
         return self.stream_messages(model, messages)
 
+    fn stream_text_with_tools(
+        self,
+        model: String,
+        prompt: String,
+        tools: List[OpenRouterToolSpec],
+    ) raises -> List[OpenRouterChunk]:
+        """Stream a simple prompt with tool definitions."""
+        var messages = List[String]()
+        messages.append(prompt)
+        return self.stream_messages_with_tools(model, messages, tools)
+
     fn stream_text_live(
         self,
         model: String,
@@ -155,7 +235,20 @@ struct OpenRouterClient:
         """Stream text and invoke callback for each chunk as it arrives."""
         var messages = List[String]()
         messages.append(prompt)
-        self.stream_messages_live(model, messages, on_chunk)
+        var empty_tools = List[OpenRouterToolSpec]()
+        self.stream_messages_live(model, messages, on_chunk, empty_tools)
+
+    fn stream_text_with_tools_live(
+        self,
+        model: String,
+        prompt: String,
+        tools: List[OpenRouterToolSpec],
+        on_chunk: fn(OpenRouterChunk) -> NoneType,
+    ) raises:
+        """Stream a prompt with tools and invoke callback live."""
+        var messages = List[String]()
+        messages.append(prompt)
+        self.stream_messages_live(model, messages, on_chunk, tools)
 
     fn stream_messages(
         self,
@@ -164,7 +257,23 @@ struct OpenRouterClient:
         system_prompt: String = "",
     ) raises -> List[OpenRouterChunk]:
         """Collect all streamed chat completion chunks into a list."""
-        var payload = self._build_payload(model, user_messages, system_prompt)
+        var empty_tools = List[OpenRouterToolSpec]()
+        return self.stream_messages_with_tools(
+            model,
+            user_messages,
+            empty_tools,
+            system_prompt,
+        )
+
+    fn stream_messages_with_tools(
+        self,
+        model: String,
+        user_messages: List[String],
+        tools: List[OpenRouterToolSpec],
+        system_prompt: String = "",
+    ) raises -> List[OpenRouterChunk]:
+        """Collect all streamed chat/tool-call chunks into a list."""
+        var payload = self._build_payload(model, user_messages, system_prompt, tools)
         var headers = self._build_headers()
         var events = self.http.post_sse(
             self.base_url + "/chat/completions",
@@ -179,10 +288,11 @@ struct OpenRouterClient:
         model: String,
         user_messages: List[String],
         on_chunk: fn(OpenRouterChunk) -> NoneType,
+        tools: List[OpenRouterToolSpec] = List[OpenRouterToolSpec](),
         system_prompt: String = "",
     ) raises:
         """Perform true live streaming and invoke callback per chunk."""
-        var payload = self._build_payload(model, user_messages, system_prompt)
+        var payload = self._build_payload(model, user_messages, system_prompt, tools)
         var headers = self._build_headers()
         var url = self.base_url + "/chat/completions"
 
@@ -331,6 +441,7 @@ struct OpenRouterClient:
         model: String,
         user_messages: List[String],
         system_prompt: String,
+        tools: List[OpenRouterToolSpec],
     ) raises -> String:
         var py_json = Python.import_module("json")
         var py_messages = Python.list()
@@ -352,6 +463,21 @@ struct OpenRouterClient:
         payload["messages"] = py_messages
         payload["stream"] = True
 
+        if len(tools) > 0:
+            var py_tools = Python.list()
+            for tool in tools:
+                var function_obj = Python.dict()
+                function_obj["name"] = tool.name
+                function_obj["description"] = tool.description
+                function_obj["parameters"] = py_json.loads(tool.parameters_json_schema)
+
+                var tool_obj = Python.dict()
+                tool_obj["type"] = "function"
+                tool_obj["function"] = function_obj
+                py_tools.append(tool_obj)
+
+            payload["tools"] = py_tools
+
         return String(py_json.dumps(payload))
 
     fn _emit_from_sse_data(
@@ -359,51 +485,111 @@ struct OpenRouterClient:
         events: List[SseEvent],
         on_chunk: fn(OpenRouterChunk) -> NoneType,
     ) raises:
-        var py_json = Python.import_module("json")
         for event in events:
-            if len(event.data) == 0:
-                continue
-            if event.data == "[DONE]":
-                return
-            try:
-                var obj = py_json.loads(event.data)
-                var choices = obj.get("choices", Python.list())
-                if len(choices) == 0:
-                    continue
-                var choice0 = choices[0]
-                var delta_obj = choice0.get("delta", Python.dict())
-                var delta = String(delta_obj.get("content", ""))
-                var finish_reason = String(choice0.get("finish_reason", ""))
-                if len(delta) > 0 or len(finish_reason) > 0:
-                    on_chunk(OpenRouterChunk(delta, finish_reason, event.data))
-            except:
-                pass
+            var parsed = self._parse_event_chunks(event)
+            for chunk in parsed:
+                on_chunk(chunk)
 
     fn _parse_stream(self, events: List[SseEvent]) raises -> List[OpenRouterChunk]:
-        """Parse OpenRouter/OpenAI-compatible SSE events into text deltas."""
+        """Parse OpenRouter/OpenAI-compatible SSE events into chunks."""
         var chunks = List[OpenRouterChunk]()
-        var py_json = Python.import_module("json")
-
         for event in events:
-            if len(event.data) == 0:
-                continue
-            if event.data == "[DONE]":
+            var parsed = self._parse_event_chunks(event)
+            for chunk in parsed:
+                chunks.append(chunk.copy())
+        return chunks^
+
+    fn _parse_event_chunks(self, event: SseEvent) raises -> List[OpenRouterChunk]:
+        """Parse one SSE event into one or more chunks.
+
+        A single SSE frame may contain:
+        - a text delta
+        - one or more tool_call deltas
+        - a finish reason
+        """
+        var out = List[OpenRouterChunk]()
+        if len(event.data) == 0 or event.data == "[DONE]":
+            return out^
+
+        var py_json = Python.import_module("json")
+        try:
+            var obj = py_json.loads(event.data)
+            var choices = obj.get("choices", Python.list())
+            if len(choices) == 0:
+                return out^
+
+            var choice0 = choices[0]
+            var delta_obj = choice0.get("delta", Python.dict())
+            var text_delta = String(delta_obj.get("content", ""))
+
+            var finish_reason: String
+            try:
+                finish_reason = String(choice0.get("finish_reason", ""))
+                if finish_reason == "None":
+                    finish_reason = ""
+            except:
+                finish_reason = ""
+
+            if len(text_delta) > 0 or len(finish_reason) > 0:
+                out.append(OpenRouterChunk(text_delta, finish_reason, event.data))
+
+            var tool_calls = choice0.get("delta", Python.dict()).get("tool_calls", Python.list())
+            var tool_call_count = Int(py=tool_calls.__len__())
+            for i in range(tool_call_count):
+                var tool_call = tool_calls[i]
+                var index = Int(py=tool_call.get("index", 0))
+                var id = String(tool_call.get("id", ""))
+                var function_obj = tool_call.get("function", Python.dict())
+                var function_name = String(function_obj.get("name", ""))
+                var arguments = String(function_obj.get("arguments", ""))
+                out.append(
+                    OpenRouterChunk(
+                        "",
+                        finish_reason,
+                        event.data,
+                        index,
+                        id,
+                        function_name,
+                        arguments,
+                    )
+                )
+        except:
+            pass
+
+        return out^
+
+
+fn assemble_tool_calls(chunks: List[OpenRouterChunk]) -> List[OpenRouterToolCall]:
+    """Assemble full tool calls from streamed OpenRouter chunks.
+
+    OpenAI-compatible streaming sends tool calls in partial deltas keyed by
+    `index`. This helper merges all deltas into complete tool calls.
+    """
+    var calls = List[OpenRouterToolCall]()
+
+    for chunk in chunks:
+        if not chunk.has_tool_call():
+            continue
+
+        var found = False
+        for i in range(len(calls)):
+            if calls[i].index == chunk.tool_call_index:
+                found = True
+                if len(chunk.tool_call_id) > 0:
+                    calls[i].id = chunk.tool_call_id
+                if len(chunk.tool_call_name) > 0:
+                    calls[i].function_name = chunk.tool_call_name
+                calls[i].arguments += chunk.tool_call_arguments
                 break
 
-            try:
-                var obj = py_json.loads(event.data)
-                var choices = obj.get("choices", Python.list())
-                if len(choices) == 0:
-                    continue
+        if not found:
+            calls.append(
+                OpenRouterToolCall(
+                    chunk.tool_call_index,
+                    chunk.tool_call_id,
+                    chunk.tool_call_name,
+                    chunk.tool_call_arguments,
+                )
+            )
 
-                var choice0 = choices[0]
-                var delta_obj = choice0.get("delta", Python.dict())
-                var delta = String(delta_obj.get("content", ""))
-                var finish_reason = String(choice0.get("finish_reason", ""))
-
-                if len(delta) > 0 or len(finish_reason) > 0:
-                    chunks.append(OpenRouterChunk(delta, finish_reason, event.data))
-            except:
-                pass
-
-        return chunks^
+    return calls^
