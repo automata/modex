@@ -18,7 +18,7 @@ Pi's architecture breaks into these layers. modex mirrors them:
 ├─────────────────────────────────────────┤
 │  Agent Core                             │  ← Turn loop: prompt → LLM → tool calls → repeat
 ├─────────────────────────────────────────┤
-│  LLM Client (Provider API)              │  ← HTTP + SSE streaming to Anthropic/OpenAI/etc.
+│  LLM Client (Provider API)              │  ← HTTP + SSE streaming to OpenRouter/OpenAI/etc.
 ├─────────────────────────────────────────┤
 │  Tools                                  │  ← read, write, edit, bash
 ├─────────────────────────────────────────┤
@@ -43,15 +43,15 @@ Pi's architecture breaks into these layers. modex mirrors them:
   - Mojo has no stdlib JSON parser yet
   - Options: Python interop (`json` module), or a simple hand-rolled parser
   - **Recommendation:** Python interop initially, native parser as a follow-up
-- [ ] **Anthropic Messages API client** — Start with one provider
-  - Streaming via SSE (`text/event-stream`)
-  - Handle `message_start`, `content_block_delta`, `message_stop` events
-  - Support tool use blocks in responses
-- [ ] **API key management** — Read from env vars (`ANTHROPIC_API_KEY`)
+- [ ] **OpenRouter API client** — Start with one provider
+  - Use the OpenAI-compatible Chat Completions API via OpenRouter
+  - Handle streaming responses and tool calls
+  - Support provider/model routing through OpenRouter model IDs
+- [ ] **API key management** — Read from env vars (`OPENROUTER_API_KEY`)
 - [ ] **Model definitions** — Struct for model metadata (id, name, context window, cost, capabilities)
 
 ### Deliverable
-A CLI that sends a prompt to Claude and streams the response to stdout.
+A CLI that sends a prompt through OpenRouter and streams the response to stdout.
 
 ---
 
@@ -136,7 +136,7 @@ A full interactive terminal UI for chatting with the agent.
 
 ## Milestone 5: Multi-Provider Support
 
-**Goal:** Support multiple LLM providers beyond Anthropic.
+**Goal:** Support multiple LLM providers beyond OpenRouter.
 
 ### Tasks
 
@@ -152,7 +152,7 @@ A full interactive terminal UI for chatting with the agent.
 - [ ] **API key storage** — `~/.modex/auth.json` for persisted keys
 
 ### Deliverable
-Switch between Claude, GPT-4o, and Gemini models within the same session.
+Switch between OpenRouter-routed models, direct GPT-4o, and Gemini models within the same session.
 
 ---
 
@@ -298,7 +298,7 @@ modex/
 │   ├── llm/                         # LLM provider clients
 │   │   ├── __init__.mojo            #    Exports: provider interfaces, model types
 │   │   ├── types.mojo               #    Model, Message, ToolCall, ToolResult
-│   │   ├── anthropic.mojo           #    Anthropic Messages API
+│   │   ├── openrouter.mojo          #    OpenRouter API (OpenAI-compatible)
 │   │   ├── openai.mojo              #    OpenAI Chat/Responses API
 │   │   └── google.mojo              #    Google Gemini API
 │   │
@@ -364,7 +364,7 @@ from json import parse, stringify
 
 The minimum viable product is a CLI that:
 1. Takes a user prompt
-2. Sends it to Claude with tool definitions
+2. Sends it through OpenRouter with tool definitions
 3. Streams the response
 4. Executes tool calls (read, write, edit, bash)
 5. Loops until the LLM stops calling tools
