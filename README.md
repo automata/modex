@@ -136,6 +136,18 @@ Read-tool loop experiment (OpenRouter requests the `read` tool, modex executes i
 pixi run mojo run -I libs experiments/openrouter_read_tool_loop.mojo
 ```
 
+Generic built-in tool loop experiment (currently supports `read`, `write`, `edit`, `bash` schemas and execution dispatch):
+
+```bash
+pixi run mojo run -I libs experiments/openrouter_builtin_tool_loop.mojo
+```
+
+Live callback version of the generic built-in tool loop:
+
+```bash
+pixi run mojo run -I libs experiments/openrouter_builtin_tool_loop_live.mojo
+```
+
 Expected output: a short streamed response or one or more parsed tool calls printed to the terminal.
 
 ### Other experiments
@@ -168,6 +180,11 @@ modex/
 │   ├── sse/                  # Incremental Server-Sent Events parser
 │   │   ├── __init__.mojo
 │   │   └── parser.mojo
+│   ├── json/                 # Native JSON parser + serializer
+│   │   ├── __init__.mojo
+│   │   ├── parser.mojo
+│   │   ├── value.mojo
+│   │   └── serializer.mojo
 │   └── llm/                  # LLM provider clients
 │       ├── __init__.mojo
 │       └── openrouter.mojo   # OpenRouter streaming + tool-call parsing
@@ -178,6 +195,8 @@ modex/
 │   ├── openrouter_stream_live.mojo
 │   ├── openrouter_tool_calls.mojo
 │   ├── openrouter_read_tool_loop.mojo
+│   ├── openrouter_builtin_tool_loop.mojo
+│   ├── openrouter_builtin_tool_loop_live.mojo
 │   └── sse_parser.mojo
 ├── tests/                    # Tests (pixi run test)
 ├── plan.md                   # Development roadmap
@@ -232,6 +251,9 @@ OpenRouter is the current initial provider for modex. It supports:
 - streamed tool-call parsing
 - tool-call assembly from partial streamed deltas
 - a minimal multi-turn `read` tool loop
+- a generic built-in tool loop with `read`, `write`, `edit`, `bash`
+- live callback streaming for the generic built-in tool loop
+- native JSON parsing/serialization (no Python `json` dependency in `libs/`)
 
 Additional direct providers may be added later — see [plan.md](plan.md).
 
