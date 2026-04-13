@@ -130,6 +130,12 @@ Tool-calling experiment (parses streamed tool-call deltas and assembles full too
 pixi run mojo run -I libs experiments/openrouter_tool_calls.mojo
 ```
 
+Read-tool loop experiment (OpenRouter requests the `read` tool, modex executes it, then sends the tool result back and prints the final answer):
+
+```bash
+pixi run mojo run -I libs experiments/openrouter_read_tool_loop.mojo
+```
+
 Expected output: a short streamed response or one or more parsed tool calls printed to the terminal.
 
 ### Other experiments
@@ -171,6 +177,7 @@ modex/
 │   ├── openrouter_stream.mojo
 │   ├── openrouter_stream_live.mojo
 │   ├── openrouter_tool_calls.mojo
+│   ├── openrouter_read_tool_loop.mojo
 │   └── sse_parser.mojo
 ├── tests/                    # Tests (pixi run test)
 ├── plan.md                   # Development roadmap
@@ -224,6 +231,7 @@ OpenRouter is the current initial provider for modex. It supports:
 - live callback streaming
 - streamed tool-call parsing
 - tool-call assembly from partial streamed deltas
+- a minimal multi-turn `read` tool loop
 
 Additional direct providers may be added later — see [plan.md](plan.md).
 

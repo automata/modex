@@ -18,7 +18,7 @@ Example:
 
 from collections import List
 from os import getenv
-from python import Python
+from python import Python, PythonObject
 
 from http_client import HttpClient, HttpHeader
 from http_client.client import ChunkedStreamDecoder
@@ -26,6 +26,7 @@ from http_client.net import TcpSocket, resolve_host
 from http_client.response import HttpResponse, get_header_ci, parse_response_head
 from http_client.tls import TlsSocket
 from sse import SseEvent, SseParser
+from tools import ReadTool, execute_read
 
 
 fn _parse_url(
@@ -238,6 +239,76 @@ struct OpenRouterClient:
         var empty_tools = List[OpenRouterToolSpec]()
         self.stream_messages_live(model, messages, on_chunk, empty_tools)
 
+    fn run_with_read_tool(self, model: String, prompt: String, max_turns: Int = 4) raises -> String:
+        """Run a minimal multi-turn loop with the built-in `read` tool.
+
+        Flow:
+        1. Send user prompt + read tool schema
+        2. Collect streamed tool calls
+        3. Execute read tool for each assembled call
+        4. Send assistant tool_calls + tool results back to model
+        5. Repeat until model returns final text or max_turns is reached
+        """
+        var read_tool = ReadTool()
+        var tools = List[OpenRouterToolSpec]()
+        tools.append(
+            OpenRouterToolSpec(
+                read_tool.name(),
+                read_tool.description(),
+                read_tool.parameters_json_schema(),
+            )
+        )
+
+        var py_messages = Python.list()
+        var user_msg = Python.dict()
+        user_msg["role"] = "user"
+        user_msg["content"] = prompt
+        py_messages.append(user_msg)
+
+        for _turn in range(max_turns):
+            var payload = self._build_payload_from_py_messages(model, py_messages, tools)
+            var headers = self._build_headers()
+            var events = self.http.post_sse(
+                self.base_url + "/chat/completions",
+                payload,
+                "application/json",
+                headers,
+            )
+            var chunks = self._parse_stream(events)
+            var calls = assemble_tool_calls(chunks)
+
+            if len(calls) == 0:
+                return _concat_text_deltas(chunks)
+
+            # Append assistant tool_calls message.
+            var assistant_msg = Python.dict()
+            assistant_msg["role"] = "assistant"
+            assistant_msg["content"] = ""
+            var py_tool_calls = Python.list()
+            for call in calls:
+                var function_obj = Python.dict()
+                function_obj["name"] = call.function_name
+                function_obj["arguments"] = call.arguments
+
+                var tool_call_obj = Python.dict()
+                tool_call_obj["id"] = call.id
+                tool_call_obj["type"] = "function"
+                tool_call_obj["function"] = function_obj
+                py_tool_calls.append(tool_call_obj)
+            assistant_msg["tool_calls"] = py_tool_calls
+            py_messages.append(assistant_msg)
+
+            # Execute tools and append tool result messages.
+            for call in calls:
+                var tool_result = self._execute_tool_call(call)
+                var tool_msg = Python.dict()
+                tool_msg["role"] = "tool"
+                tool_msg["tool_call_id"] = call.id
+                tool_msg["content"] = tool_result
+                py_messages.append(tool_msg)
+
+        raise Error("run_with_read_tool exceeded max_turns without a final response")
+
     fn stream_text_with_tools_live(
         self,
         model: String,
@@ -436,6 +507,28 @@ struct OpenRouterClient:
                 result.append(String(buffer[sep + 4 :]))
                 return result^
 
+    fn _execute_tool_call(self, call: OpenRouterToolCall) raises -> String:
+        if call.function_name != "read":
+            return "Error: unsupported tool: " + call.function_name
+
+        try:
+            var py_json = Python.import_module("json")
+            var args = py_json.loads(call.arguments)
+            var path = String(args.get("path", ""))
+            var offset = 1
+            var limit = 2000
+            try:
+                offset = Int(py=args.get("offset", 1))
+            except:
+                pass
+            try:
+                limit = Int(py=args.get("limit", 2000))
+            except:
+                pass
+            return execute_read(path, offset, limit)
+        except e:
+            return "Error executing read tool: " + String(e)
+
     fn _build_payload(
         self,
         model: String,
@@ -443,7 +536,6 @@ struct OpenRouterClient:
         system_prompt: String,
         tools: List[OpenRouterToolSpec],
     ) raises -> String:
-        var py_json = Python.import_module("json")
         var py_messages = Python.list()
 
         if len(system_prompt) > 0:
@@ -458,6 +550,15 @@ struct OpenRouterClient:
             user_msg["content"] = message
             py_messages.append(user_msg)
 
+        return self._build_payload_from_py_messages(model, py_messages, tools)
+
+    fn _build_payload_from_py_messages(
+        self,
+        model: String,
+        py_messages: PythonObject,
+        tools: List[OpenRouterToolSpec],
+    ) raises -> String:
+        var py_json = Python.import_module("json")
         var payload = Python.dict()
         payload["model"] = model
         payload["messages"] = py_messages
@@ -593,3 +694,11 @@ fn assemble_tool_calls(chunks: List[OpenRouterChunk]) -> List[OpenRouterToolCall
             )
 
     return calls^
+
+
+fn _concat_text_deltas(chunks: List[OpenRouterChunk]) -> String:
+    var out = String()
+    for chunk in chunks:
+        if len(chunk.delta) > 0:
+            out += chunk.delta
+    return out
