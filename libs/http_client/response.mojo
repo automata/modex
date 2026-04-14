@@ -2,6 +2,8 @@
 
 from collections import Dict
 
+from .chunked import decode_chunked_body
+
 
 struct HttpResponse(Movable):
     """Parsed HTTP/1.1 response."""
@@ -176,111 +178,3 @@ fn _ascii_lower(b: UInt8) -> UInt8:
     return b
 
 
-fn _trim_ascii_spaces(s: String) -> String:
-    """Trim ASCII spaces and tabs."""
-    if len(s) == 0:
-        return s
-
-    var b = s.as_bytes()
-    var start = 0
-    var stop = len(s)
-
-    while start < stop and (
-        b[start] == UInt8(ord(" ")) or b[start] == UInt8(ord("\t"))
-    ):
-        start += 1
-
-    while stop > start and (
-        b[stop - 1] == UInt8(ord(" ")) or b[stop - 1] == UInt8(ord("\t"))
-    ):
-        stop -= 1
-
-    return String(s[start:stop])
-
-
-fn _find_chunk_line_end(buffer: String, start: Int) -> Dict[Int, Int]:
-    var info = Dict[Int, Int]()
-    var rel_crlf = String(buffer[start:]).find("\r\n")
-    var rel_lf = String(buffer[start:]).find("\n")
-
-    if rel_crlf >= 0 and (rel_lf < 0 or rel_crlf <= rel_lf):
-        info[0] = start + rel_crlf
-        info[1] = 2
-        return info^
-    if rel_lf >= 0:
-        info[0] = start + rel_lf
-        info[1] = 1
-        return info^
-    return info^
-
-
-fn _chunk_data_terminator_len(buffer: String, pos: Int) -> Int:
-    if pos + 2 <= len(buffer):
-        if String(buffer[pos : pos + 2]) == "\r\n":
-            return 2
-    if pos + 1 <= len(buffer):
-        if String(buffer[pos : pos + 1]) == "\n":
-            return 1
-    return 0
-
-
-fn _parse_chunk_size_hex(line: String) raises -> Int:
-    """Parse a chunk size line like '1a;ext=value'."""
-    var trimmed = _trim_ascii_spaces(line)
-    var semi = trimmed.find(";")
-    var hex_part = trimmed if semi < 0 else String(trimmed[:semi])
-
-    if len(hex_part) == 0:
-        raise Error("Malformed chunked body: empty chunk size")
-
-    var bytes = hex_part.as_bytes()
-    var value = 0
-    for i in range(len(hex_part)):
-        value *= 16
-        var c = bytes[i]
-        if c >= UInt8(ord("0")) and c <= UInt8(ord("9")):
-            value += Int(c - UInt8(ord("0")))
-        elif c >= UInt8(ord("a")) and c <= UInt8(ord("f")):
-            value += 10 + Int(c - UInt8(ord("a")))
-        elif c >= UInt8(ord("A")) and c <= UInt8(ord("F")):
-            value += 10 + Int(c - UInt8(ord("A")))
-        else:
-            raise Error("Malformed chunked body: invalid hex digit in chunk size")
-    return value
-
-
-fn _decode_chunked_body(body: String) raises -> String:
-    """Decode HTTP chunked transfer encoding.
-
-    Tolerates both CRLF and bare LF chunk framing line endings.
-    """
-    var out = String()
-    var pos = 0
-
-    while True:
-        var line_info = _find_chunk_line_end(body, pos)
-        if len(line_info) == 0:
-            raise Error("Malformed chunked body: missing chunk size terminator")
-
-        var line_end = line_info[0]
-        var term_len = line_info[1]
-        var size_line = String(body[pos:line_end])
-        var chunk_size = _parse_chunk_size_hex(size_line)
-        pos = line_end + term_len
-
-        if chunk_size == 0:
-            # Optional trailers follow; ignore them.
-            break
-
-        if pos + chunk_size > len(body):
-            raise Error("Malformed chunked body: chunk exceeds body length")
-
-        out += String(body[pos : pos + chunk_size])
-        pos += chunk_size
-
-        var data_term_len = _chunk_data_terminator_len(body, pos)
-        if data_term_len == 0:
-            raise Error("Malformed chunked body: missing line ending after chunk data")
-        pos += data_term_len
-
-    return out

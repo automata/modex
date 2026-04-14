@@ -16,6 +16,7 @@ struct HttpHeader(Copyable):
         self.name = name
         self.value = value
 
+from .chunked import ChunkedStreamDecoder
 from .net import TcpSocket, resolve_host
 from .response import HttpResponse, get_header_ci, parse_response, parse_response_head
 from .tls import TlsSocket
@@ -60,110 +61,6 @@ fn _parse_url(
     else:
         host = host_port
         port = "443" if scheme == "https" else "80"
-
-
-struct ChunkedStreamDecoder:
-    """Incremental decoder for HTTP chunked transfer encoding.
-
-    Some servers in streaming mode are lax about using bare `\n` instead of
-    `\r\n` between chunk framing lines. We accept both here.
-    """
-
-    var buffer: String
-    var current_chunk_size: Int
-    var done: Bool
-
-    fn __init__(out self):
-        self.buffer = ""
-        self.current_chunk_size = -1
-        self.done = False
-
-    fn feed(mut self, chunk: String) raises -> String:
-        """Feed raw chunked bytes, return decoded body bytes."""
-        if self.done:
-            return ""
-
-        self.buffer += chunk
-        var out = String()
-
-        while True:
-            if self.current_chunk_size < 0:
-                var size_info = _find_chunk_line_end(self.buffer)
-                if len(size_info) == 0:
-                    break
-                var line_end = Int(size_info[0])
-                var term_len = Int(size_info[1])
-                var size_line = String(self.buffer[:line_end])
-                self.current_chunk_size = _parse_chunk_size_line(size_line)
-                self.buffer = String(self.buffer[line_end + term_len :])
-                if self.current_chunk_size == 0:
-                    self.done = True
-                    break
-
-            if len(self.buffer) < self.current_chunk_size + 1:
-                break
-
-            if len(self.buffer) < self.current_chunk_size:
-                break
-            out += String(self.buffer[: self.current_chunk_size])
-
-            if len(self.buffer) == self.current_chunk_size:
-                break
-
-            var term_info = _chunk_data_terminator_len(self.buffer, self.current_chunk_size)
-            if term_info == 0:
-                if len(self.buffer) < self.current_chunk_size + 2:
-                    break
-                raise Error("Malformed chunked stream: missing line ending after chunk")
-            self.buffer = String(self.buffer[self.current_chunk_size + term_info :])
-            self.current_chunk_size = -1
-
-        return out
-
-
-fn _parse_chunk_size_line(line: String) raises -> Int:
-    var semi = line.find(";")
-    var hex_part = line if semi < 0 else String(line[:semi])
-    var bytes = hex_part.as_bytes()
-    var value = 0
-    for i in range(len(hex_part)):
-        value *= 16
-        var c = bytes[i]
-        if c >= UInt8(ord("0")) and c <= UInt8(ord("9")):
-            value += Int(c - UInt8(ord("0")))
-        elif c >= UInt8(ord("a")) and c <= UInt8(ord("f")):
-            value += 10 + Int(c - UInt8(ord("a")))
-        elif c >= UInt8(ord("A")) and c <= UInt8(ord("F")):
-            value += 10 + Int(c - UInt8(ord("A")))
-        else:
-            raise Error("Malformed chunked stream: invalid hex digit")
-    return value
-
-
-fn _find_chunk_line_end(buffer: String) -> List[Int]:
-    var info = List[Int]()
-    var crlf = buffer.find("\r\n")
-    var lf = buffer.find("\n")
-
-    if crlf >= 0 and (lf < 0 or crlf <= lf):
-        info.append(crlf)
-        info.append(2)
-        return info^
-    if lf >= 0:
-        info.append(lf)
-        info.append(1)
-        return info^
-    return info^
-
-
-fn _chunk_data_terminator_len(buffer: String, data_len: Int) -> Int:
-    if len(buffer) >= data_len + 2:
-        if String(buffer[data_len : data_len + 2]) == "\r\n":
-            return 2
-    if len(buffer) >= data_len + 1:
-        if String(buffer[data_len : data_len + 1]) == "\n":
-            return 1
-    return 0
 
 
 fn _append_events(mut dst: List[SseEvent], src: List[SseEvent]):

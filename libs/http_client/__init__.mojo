@@ -15,5 +15,6 @@ Example:
         print(response.body)
 """
 
+from .chunked import ChunkedStreamDecoder, decode_chunked_body
 from .client import HttpClient, HttpHeader
 from .response import HttpResponse
