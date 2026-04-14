@@ -64,6 +64,8 @@ Mojo 0.26.x.x.dev... (nightly)
 pixi run run
 ```
 
+This launches the current minimal colored coding-agent REPL backed by OpenRouter and the built-in tools.
+
 ### Build
 
 ```bash
@@ -103,8 +105,8 @@ mojo repl
 
 ### OpenRouter streaming
 
-These experiments use the native `http_client` + `sse` + `llm/openrouter`
-stack to stream completions from OpenRouter.
+These experiments use the native `http_client` + `sse` + `json` +
+`llm/openrouter` stack to stream completions from OpenRouter.
 
 Set your API key:
 
@@ -173,9 +175,10 @@ modex/
 ├── libs/                     # Reusable Mojo packages (each extractable)
 │   ├── http_client/          # Native HTTP/HTTPS client over libc + OpenSSL
 │   │   ├── __init__.mojo     # Package exports
+│   │   ├── chunked.mojo      # Shared chunked transfer decoding
 │   │   ├── client.mojo       # HttpClient high-level API + SSE fetch helpers
 │   │   ├── net.mojo          # Low-level socket FFI bindings
-│   │   ├── response.mojo     # HTTP response parser + chunked decoding
+│   │   ├── response.mojo     # HTTP response parser
 │   │   └── tls.mojo          # OpenSSL TLS socket
 │   ├── sse/                  # Incremental Server-Sent Events parser
 │   │   ├── __init__.mojo
@@ -185,9 +188,20 @@ modex/
 │   │   ├── parser.mojo
 │   │   ├── value.mojo
 │   │   └── serializer.mojo
-│   └── llm/                  # LLM provider clients
+│   ├── llm/                  # LLM provider clients + shared history/types
+│   │   ├── __init__.mojo
+│   │   ├── history.mojo      # SessionHistory / SessionMessage
+│   │   ├── openrouter.mojo   # OpenRouter streaming + tool loops
+│   │   └── types.mojo        # Shared provider structs
+│   ├── style/                # Minimal ANSI styling helpers for CLI output
+│   │   └── __init__.mojo
+│   └── tools/                # Built-in tool definitions + execution
 │       ├── __init__.mojo
-│       └── openrouter.mojo   # OpenRouter streaming + tool-call parsing
+│       ├── bash.mojo
+│       ├── edit.mojo
+│       ├── read.mojo
+│       ├── tool.mojo
+│       └── write.mojo
 ├── experiments/              # Standalone experiments
 │   ├── http_client.mojo
 │   ├── http_client_native.mojo
@@ -250,12 +264,34 @@ OpenRouter is the current initial provider for modex. It supports:
 - live callback streaming
 - streamed tool-call parsing
 - tool-call assembly from partial streamed deltas
+- structured in-memory conversation history via `SessionHistory`
 - a minimal multi-turn `read` tool loop
 - a generic built-in tool loop with `read`, `write`, `edit`, `bash`
 - live callback streaming for the generic built-in tool loop
 - native JSON parsing/serialization (no Python `json` dependency in `libs/`)
+- shared chunked transfer decoding across buffered and live streaming paths
+
+Current main limitations:
+- the REPL is still minimal and does not preserve conversation history across turns yet
+- tool execution is still minimal and largely Python-backed for file/subprocess operations
+- no safety/sandboxing model yet
+- no persistent sessions yet
+- socket resolution is currently IPv4-only
+- native JSON Unicode handling is still incomplete for some escape cases
 
 Additional direct providers may be added later — see [plan.md](plan.md).
+
+## Near-term roadmap
+
+Recommended implementation order from here:
+
+1. **Persistent sessions**
+2. **Tool safety / sandboxing**
+3. **Provider-agnostic agent core extraction**
+4. **TUI**
+5. **Multi-provider support**
+
+See [plan.md](plan.md) for the full roadmap.
 
 ## License
 

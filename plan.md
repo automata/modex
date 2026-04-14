@@ -47,9 +47,11 @@ Pi's architecture breaks into these layers. modex mirrors them:
   - [x] HTTPS via OpenSSL `libssl`/`libcrypto` FFI
   - [x] Incremental header reading
   - [x] Custom headers and POST support
-- [ ] **JSON parsing** — Not yet native
-  - [x] Python interop (`json`) works for payload serialization/deserialization
-  - [ ] Native Mojo JSON parser/serializer still needed (`libs/json/`)
+- [x] **JSON parsing** — Native Mojo JSON package implemented in `libs/json/`
+  - [x] Native parser for objects, arrays, strings, numbers, bool, null
+  - [x] Native serializer/builders for provider payload generation
+  - [x] OpenRouter client and built-in tool dispatcher no longer rely on Python `json`
+  - [ ] Unicode handling is still minimal (`\uXXXX` outside ASCII is not fully supported yet)
 - [x] **OpenRouter API client** — Implemented in `libs/llm/openrouter.mojo`
   - [x] OpenAI-compatible Chat Completions API via OpenRouter
   - [x] Streaming responses over SSE
@@ -60,6 +62,9 @@ Pi's architecture breaks into these layers. modex mirrors them:
 - [ ] **Model definitions** — Minimal model handling exists (pass model ID string), but no full model registry/metadata structs yet
 - [x] **SSE parser** — Implemented in `libs/sse/`
 - [x] **Chunked transfer decoding** — Implemented in `libs/http_client/`
+  - [x] Shared chunked decoding extracted to `libs/http_client/chunked.mojo`
+  - [x] Buffered and streaming paths now use the same implementation
+  - [x] Decoder made tolerant of both `\r\n` and bare `\n` in chunk framing
 
 ### Deliverable
 
@@ -73,11 +78,11 @@ A CLI/experiment can send a prompt through OpenRouter and stream the response to
 
 ### Status
 
-**Partially implemented.** Provider-side tool calling is now supported; execution-side tools are not yet implemented.
+**Substantially implemented.** Built-in tools, provider-side tool calling, and a generic multi-turn built-in tool loop are working. Tool safety/sandboxing and a more general pluggable tool protocol still remain.
 
 ### Tasks
 
-- [ ] **Tool trait/protocol** — Define the tool interface:
+- [ ] **Tool trait/protocol** — Define the general reusable tool interface:
 
   ```
   trait Tool:
@@ -90,32 +95,47 @@ A CLI/experiment can send a prompt through OpenRouter and stream the response to
 - [x] **Provider-side tool definitions** — `OpenRouterToolSpec` implemented and sent in provider payloads
 - [x] **Provider-side tool-call parsing** — Streamed tool call deltas are parsed from OpenRouter SSE frames
 - [x] **Tool-call assembly** — `assemble_tool_calls(...)` reconstructs full tool calls from streamed partial deltas
-- [ ] **Tool: `read`** — Read file contents (text + image support)
-  - Path resolution (relative to cwd)
-  - Line offset/limit for large files
-  - Output truncation (50KB / 2000 lines)
-- [ ] **Tool: `write`** — Write/overwrite files, create parent dirs
-- [ ] **Tool: `edit`** — Find-and-replace exact text in files
-- [ ] **Tool: `bash`** — Execute shell commands
-  - Subprocess spawning (Mojo's `os` module or `libc` FFI)
-  - Stdout/stderr capture
-  - Timeout support
-  - Output truncation
-- [ ] **Tool execution loop** — Parse tool calls → execute tools → send tool results back to model → repeat until final assistant response
-- [ ] **System prompt** — Build the default system prompt with tool descriptions
+- [x] **Tool: `read`** — Implemented in `libs/tools/read.mojo`
+  - [x] Path resolution relative to cwd
+  - [x] Line offset/limit support
+  - [x] Output truncation behavior
+  - [ ] Image support not implemented yet
+- [x] **Tool: `write`** — Implemented in `libs/tools/write.mojo`
+- [x] **Tool: `edit`** — Implemented in `libs/tools/edit.mojo`
+- [x] **Tool: `bash`** — Implemented in `libs/tools/bash.mojo`
+  - [x] Subprocess execution
+  - [x] Stdout/stderr capture
+  - [x] Timeout support
+  - [x] Output truncation
+- [x] **Tool execution loop** — Implemented in `OpenRouterClient`
+  - [x] `run_with_read_tool(...)`
+  - [x] `run_with_builtin_tools(...)`
+  - [x] `run_with_builtin_tools_live(...)`
+- [ ] **System prompt** — Default reusable system prompt layer still needed
+- [ ] **Tool safety / sandboxing** — Path restrictions, permission model, safer write/edit semantics still needed
 
 ### Deliverable
 
-A CLI where you can ask the LLM to read files, write code, run commands — the full coding-agent loop. Current state: tool-call transport/parsing works, but tool execution is not yet connected.
+A CLI/experiment where you can ask the LLM to read files, write code, run commands, and complete a multi-turn tool loop. Current state: this works in experiments, but still needs safety controls and a cleaner provider-agnostic agent abstraction.
 
 ---
 
 ## Milestone 3: Session Management
 
+**Recommended next milestone.** Now that transport, JSON, streaming, tools, and structured in-memory history exist, persistent sessions are the next most valuable foundational step.
+
 **Goal:** Persist conversations and support resuming.
+
+### Status
+
+**Started.** A structured in-memory session/message abstraction now exists in `libs/llm/history.mojo`, but persistence and resume flows are not implemented yet.
 
 ### Tasks
 
+- [x] **Structured in-memory history** — `SessionMessage` / `SessionHistory`
+  - [x] User/system/assistant/tool result messages
+  - [x] Assistant tool-call message support
+  - [x] Serialization into provider-compatible message payloads
 - [ ] **JSONL session format** — Tree-structured entries with `id` and `parentId`
   - Message entries (user, assistant, toolResult)
   - Metadata entries (model, timestamps)
@@ -132,9 +152,49 @@ Sessions auto-save and can be resumed across restarts.
 
 ---
 
-## Milestone 4: Terminal UI (TUI)
+## Milestone 4: Tool Safety & Sandboxing
+
+**Recommended after persistent sessions.** The tool loop works, but before a broader user-facing CLI/TUI, modex should add guardrails around filesystem and shell access.
+
+### Tasks
+
+- [ ] **Path restrictions** — Constrain read/write/edit to allowed roots
+- [ ] **Bash permission model** — Allow/deny model for shell execution
+- [ ] **Safer write/edit behavior** — Add overwrite/replace safeguards where needed
+- [ ] **Tool confirmation hooks** — Support prompting/approval for risky operations
+- [ ] **Configurable policy** — Project/global safety settings
+
+### Deliverable
+
+A usable coding-agent loop with basic safety boundaries suitable for wider interactive use.
+
+---
+
+## Milestone 5: Agent Core Extraction
+
+**Recommended after safety work.** The current multi-turn loop lives inside `OpenRouterClient`; extract it into a provider-agnostic agent/session layer once persistence and safety needs are clearer.
+
+### Tasks
+
+- [ ] **Provider-agnostic agent loop** — Move prompt/tool/result orchestration out of `OpenRouterClient`
+- [ ] **Generic message/session model** — Reuse `SessionHistory` as the core conversation abstraction
+- [ ] **Tool registry abstraction** — Go beyond the current built-in dispatcher
+- [ ] **Agent events/hooks** — Turn start/end, tool call/result, stream events
+- [ ] **Provider adapter boundary** — Keep provider-specific transport/parsing separate from agent policy
+
+### Deliverable
+
+A clean agent core that can work across OpenRouter and future providers.
+
+---
+
+## Milestone 6: Terminal UI (TUI)
 
 **Goal:** Interactive terminal interface with editor, chat display, and keyboard navigation.
+
+### Status
+
+**Not started as a full TUI.** A minimal colored stdin/stdout REPL now exists in `src/main.mojo`, and reusable ANSI helpers live in `libs/style/`, but there is no raw-mode/editor-driven terminal UI yet.
 
 ### Tasks
 
@@ -158,7 +218,7 @@ A full interactive terminal UI for chatting with the agent.
 
 ---
 
-## Milestone 5: Multi-Provider Support
+## Milestone 7: Multi-Provider Support
 
 **Goal:** Support multiple LLM providers beyond OpenRouter.
 
@@ -181,7 +241,7 @@ Switch between OpenRouter-routed models, direct GPT-4o, and Gemini models within
 
 ---
 
-## Milestone 6: Context & Customization
+## Milestone 8: Context & Customization
 
 **Goal:** Support AGENTS.md, system prompt customization, and settings.
 
@@ -202,7 +262,7 @@ Project-aware agent that reads instructions from AGENTS.md and manages context i
 
 ---
 
-## Milestone 7: Extensibility
+## Milestone 9: Extensibility
 
 **Goal:** Plugin system for extending modex.
 
@@ -225,7 +285,7 @@ Users can add custom tools, commands, and event handlers.
 
 ---
 
-## Milestone 8: Advanced Features
+## Milestone 10: Advanced Features
 
 **Goal:** Parity with pi's advanced capabilities.
 
@@ -252,13 +312,13 @@ Feature-complete coding agent.
 
 Mojo is young. Key missing pieces:
 
-- **~~No HTTP client~~** — ✅ Solved: native libc socket FFI works (`libs/http_client/`). Python `requests` interop also works as fallback.
-- **No JSON parser** — Need to build or bridge. Start native (it's a good Mojo exercise), fall back to Python `json` if needed.
-- **No async/await** — Mojo has no async runtime; need to handle streaming with threads or blocking I/O
+- **~~No HTTP client~~** — ✅ Solved: native libc socket FFI works (`libs/http_client/`)
+- **~~No JSON parser~~** — ✅ Solved for current needs: native `libs/json/` now handles provider/tool-loop JSON
+- **No async/await** — Mojo has no async runtime; streaming is currently blocking I/O
 - **No dynamic module loading** — Extensions can't be loaded at runtime natively
 - **String API in flux** — Nightly changes frequently: `s[i]` requires `byte=` keyword, slicing returns `StringSlice` (needs `String()` wrapping), `@value` removed, `alloc` is a free function, move init uses `deinit take` syntax. Track nightly changes carefully.
 
-**Strategy:** Build native implementations in `libs/` where feasible (HTTP, JSON, TUI). Use Python interop for TLS/HTTPS until native OpenSSL FFI is built.
+**Strategy:** Build native implementations in `libs/` where feasible (HTTP, TLS, SSE, JSON). Use Python interop pragmatically for file I/O, subprocess execution, and other ecosystem gaps until native replacements are justified.
 
 ### 2. Terminal I/O
 
@@ -294,6 +354,7 @@ LLM APIs stream via Server-Sent Events.
 
 - [x] OpenSSL `libssl` / `libcrypto` FFI implemented
 - [x] HTTPS requests working against OpenRouter and other hosts
+- [x] Shared chunked transfer decoding extracted and used by both buffered + live streaming paths
 - [ ] Proper IPv6 + multi-address fallback (currently forced to IPv4 because socket layer only supports `sockaddr_in`)
 
 ---
@@ -318,8 +379,9 @@ modex/
 ├── libs/                            # Extractable Mojo packages
 │   │
 │   ├── http_client/                 # ✅ implemented
-│   │   ├── __init__.mojo            #    Exports: HttpClient, HttpHeader, HttpResponse
-│   │   ├── client.mojo              #    HTTP requests, SSE fetch, chunked stream decoder
+│   │   ├── __init__.mojo            #    Exports: HttpClient, HttpHeader, HttpResponse, chunked helpers
+│   │   ├── chunked.mojo             #    Shared chunked transfer decoding
+│   │   ├── client.mojo              #    HTTP requests, SSE fetch
 │   │   ├── net.mojo                 #    Socket FFI: TcpSocket, resolve_host()
 │   │   ├── response.mojo            #    Response parser: status, headers, body
 │   │   └── tls.mojo                 #    OpenSSL-based TLS socket
@@ -328,19 +390,40 @@ modex/
 │   │   ├── __init__.mojo            #    Exports: SseParser, SseEvent
 │   │   └── parser.mojo              #    Incremental SSE parser
 │   │
-│   ├── llm/                         # ✅ partially implemented
-│   │   ├── __init__.mojo            #    Exports: OpenRouter client/types/helpers
-│   │   └── openrouter.mojo          #    OpenRouter streaming client + tool-call parsing
+│   ├── json/                        # ✅ implemented
+│   │   ├── __init__.mojo            #    Exports: parse_json, JsonValue, serializer helpers
+│   │   ├── parser.mojo              #    JSON token/value boundary parsing
+│   │   ├── serializer.mojo          #    JSON builders/escaping
+│   │   └── value.mojo               #    JSON value view/navigation
 │   │
-│   ├── json/                        # planned
-│   ├── tui/                         # planned
-│   └── tools/                       # planned
+│   ├── llm/                         # ✅ substantially implemented
+│   │   ├── __init__.mojo            #    Exports: OpenRouter client, history, shared types
+│   │   ├── history.mojo             #    SessionHistory / SessionMessage abstraction
+│   │   ├── openrouter.mojo          #    OpenRouter streaming client + tool loop
+│   │   └── types.mojo               #    Shared LLM/provider structs
+│   │
+│   ├── style/                       # ✅ implemented (minimal ANSI styling helpers)
+│   │   └── __init__.mojo
+│   │
+│   ├── tools/                       # ✅ implemented (minimal, Python-backed execution)
+│   │   ├── __init__.mojo
+│   │   ├── bash.mojo
+│   │   ├── edit.mojo
+│   │   ├── read.mojo
+│   │   ├── tool.mojo
+│   │   └── write.mojo
+│   │
+│   └── tui/                         # planned
 │
 ├── experiments/                     # Standalone experiments & spikes
 │   ├── http_client.mojo             #    Python interop HTTP client
 │   ├── http_client_native.mojo      #    Native libc socket HTTP client
+│   ├── openrouter_builtin_tool_loop.mojo       # Generic built-in tool loop
+│   ├── openrouter_builtin_tool_loop_live.mojo  # Live generic built-in tool loop
+│   ├── openrouter_read_tool_loop.mojo          # Minimal read-tool loop
 │   ├── openrouter_stream.mojo       #    Buffered OpenRouter streaming
 │   ├── openrouter_stream_live.mojo  #    Live callback OpenRouter streaming
+│   ├── openrouter_tool_calls.mojo   #    Streamed tool-call parsing demo
 │   └── sse_parser.mojo              #    Standalone SSE parser demo
 │
 └── tests/                           # Tests (pixi run test)
@@ -374,12 +457,13 @@ from json import parse, stringify
 
 - **Mojo** (nightly) — Installed via pixi from `max-nightly` channel
 - **pixi** — Package manager for Mojo and Python dependencies
-- **Python `requests`** — For Python interop HTTP (pixi dependency, used in experiments)
+- **Python `requests`** — For Python interop HTTP (pixi dependency, mainly retained for early experiments)
 - **libc** — For native sockets, termios, subprocess (via Mojo FFI, no extra install)
+- **OpenSSL** — Used via FFI/runtime loading for native HTTPS/TLS
 
 ---
 
-## MVP Definition (Milestones 1-2)
+## MVP Definition (Milestones 1-3)
 
 The minimum viable product is a CLI that:
 
@@ -390,7 +474,15 @@ The minimum viable product is a CLI that:
 5. Loops until the LLM stops calling tools
 6. Prints the final response
 
-This is achievable without a TUI — just stdin/stdout. The TUI and session management come after.
+This is now largely achieved in experiment form and a minimal stdin/stdout REPL in `src/main.mojo`. The main remaining gaps for a cleaner MVP are persistent sessions, safety controls, and a more provider-agnostic agent core.
+
+### Recommended implementation order from here
+
+1. **Persistent sessions**
+2. **Tool safety / sandboxing**
+3. **Provider-agnostic agent core extraction**
+4. **TUI**
+5. **Multi-provider support**
 
 ---
 
@@ -401,11 +493,15 @@ This is achievable without a TUI — just stdin/stdout. The TUI and session mana
 3. **~~Project structure~~** — `libs/` for extractable packages, `src/` for modex app. Each lib is self-contained with `__init__.mojo`.
 4. **~~TLS/HTTPS~~** — Implemented via OpenSSL FFI in `libs/http_client/tls.mojo`.
 5. **~~Initial provider~~** — OpenRouter implemented first, including live streaming and tool-call parsing.
+6. **~~Structured conversation abstraction~~** — `SessionHistory` / `SessionMessage` implemented and used by tool loops.
+7. **~~Native JSON~~** — `libs/json/` implemented and wired into provider/tool parsing and serialization.
+8. **~~Minimal CLI styling layer~~** — `libs/style/` extracted for reusable ANSI terminal styling helpers.
 
 ## Open Questions
 
-1. **Tool execution loop design** — Should tool execution be provider-agnostic in a shared agent layer, or start with an OpenRouter-specific loop and generalize later?
-2. **Extension model** — Should extensions be Python scripts, compiled Mojo packages, or IPC-based plugins?
-3. **Compatibility with pi** — Should session files be compatible? Same AGENTS.md format?
+1. **Agent core extraction** — When should the current OpenRouter-specific tool loop move into a provider-agnostic agent/session layer?
+2. **Persistent session format** — Should session files be compatible with pi? Same tree/message schema?
+3. **Extension model** — Should extensions be Python scripts, compiled Mojo packages, or IPC-based plugins?
 4. **Licensing** — MIT to match pi?
-5. **IPv6 support** — Add full `sockaddr_in6` + multi-address fallback now, or defer until after the agent loop?
+5. **IPv6 support** — Add full `sockaddr_in6` + multi-address fallback now, or defer until after persistent sessions/safety work?
+6. **JSON completeness** — How far should `libs/json/` go beyond current practical needs (Unicode, floats, full DOM, performance)?

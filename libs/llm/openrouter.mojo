@@ -149,24 +149,31 @@ struct OpenRouterClient:
         var empty_tools = List[OpenRouterToolSpec]()
         self.stream_messages_live(model, messages, on_chunk, empty_tools)
 
-    fn run_with_read_tool(self, model: String, prompt: String, max_turns: Int = 4) raises -> String:
+    fn run_with_read_tool(
+        self,
+        model: String,
+        prompt: String,
+        max_turns: Int = 4,
+        system_prompt: String = "",
+    ) raises -> String:
         """Backward-compatible alias for the generic built-in tool loop."""
         var defs = List[ToolDefinition]()
         var all_defs = builtin_tool_definitions()
         for d in all_defs:
             if d.name == "read":
                 defs.append(d.copy())
-        return self.run_with_builtin_tools(model, prompt, defs, max_turns)
+        return self.run_with_builtin_tools(model, prompt, defs, max_turns, system_prompt)
 
     fn run_with_default_builtin_tools(
         self,
         model: String,
         prompt: String,
         max_turns: Int = 6,
+        system_prompt: String = "",
     ) raises -> String:
         """Run the generic loop with the default built-in tool set."""
         var defs = builtin_tool_definitions()
-        return self.run_with_builtin_tools(model, prompt, defs, max_turns)
+        return self.run_with_builtin_tools(model, prompt, defs, max_turns, system_prompt)
 
     fn run_with_default_builtin_tools_live(
         self,
@@ -174,10 +181,11 @@ struct OpenRouterClient:
         prompt: String,
         on_chunk: fn(OpenRouterChunk) -> NoneType,
         max_turns: Int = 6,
+        system_prompt: String = "",
     ) raises -> String:
         """Live callback version of the default built-in tool loop."""
         var defs = builtin_tool_definitions()
-        return self.run_with_builtin_tools_live(model, prompt, defs, on_chunk, max_turns)
+        return self.run_with_builtin_tools_live(model, prompt, defs, on_chunk, max_turns, system_prompt)
 
     fn run_with_builtin_tools(
         self,
@@ -185,6 +193,7 @@ struct OpenRouterClient:
         prompt: String,
         tool_defs: List[ToolDefinition],
         max_turns: Int = 6,
+        system_prompt: String = "",
     ) raises -> String:
         """Run a generic multi-turn loop with built-in tools.
 
@@ -197,6 +206,8 @@ struct OpenRouterClient:
             tools.append(OpenRouterToolSpec(d.name, d.description, d.parameters_json_schema))
 
         var history = SessionHistory()
+        if len(system_prompt) > 0:
+            history.append_system(system_prompt)
         history.append_user(prompt)
 
         for _turn in range(max_turns):
@@ -229,6 +240,7 @@ struct OpenRouterClient:
         tool_defs: List[ToolDefinition],
         on_chunk: fn(OpenRouterChunk) -> NoneType,
         max_turns: Int = 6,
+        system_prompt: String = "",
     ) raises -> String:
         """Live callback version of the generic built-in tool loop."""
         var tools = List[OpenRouterToolSpec]()
@@ -236,6 +248,8 @@ struct OpenRouterClient:
             tools.append(OpenRouterToolSpec(d.name, d.description, d.parameters_json_schema))
 
         var history = SessionHistory()
+        if len(system_prompt) > 0:
+            history.append_system(system_prompt)
         history.append_user(prompt)
 
         for _turn in range(max_turns):
