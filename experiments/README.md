@@ -12,16 +12,16 @@ Set your API key:
 export OPENROUTER_API_KEY=sk-or-...
 ```
 
-Buffered streaming experiment:
+Collected streaming experiment:
 
 ```bash
 pixi run mojo run -I libs experiments/openrouter_stream.mojo
 ```
 
-Live callback streaming experiment:
+Callback streaming experiment:
 
 ```bash
-pixi run mojo run -I libs experiments/openrouter_stream_live.mojo
+pixi run mojo run -I libs experiments/openrouter_stream_callback.mojo
 ```
 
 Tool-calling experiment (parses streamed tool-call deltas and assembles full tool calls):
@@ -42,10 +42,10 @@ Generic built-in tool loop experiment (currently supports `read`, `write`, `edit
 pixi run mojo run -I libs experiments/openrouter_builtin_tool_loop.mojo
 ```
 
-Live callback version of the generic built-in tool loop:
+Callback version of the generic built-in tool loop:
 
 ```bash
-pixi run mojo run -I libs experiments/openrouter_builtin_tool_loop_live.mojo
+pixi run mojo run -I libs experiments/openrouter_builtin_tool_loop_callback.mojo
 ```
 
 Expected output: a short streamed response or one or more parsed tool calls printed to the terminal.
