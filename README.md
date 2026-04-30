@@ -1,5 +1,7 @@
 # modex 🔥
 
+**IMPORTANT: This repos is an active WIP, the overall APIs are not stable yet and can change in the near future.**
+
 A Mojo-based AI coding harness — a terminal coding agent inspired by
 [pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent).
 
