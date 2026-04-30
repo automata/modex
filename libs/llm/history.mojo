@@ -40,6 +40,9 @@ struct SessionHistory:
     fn __init__(out self):
         self.messages = List[SessionMessage]()
 
+    fn append_message(mut self, message: SessionMessage):
+        self.messages.append(message.copy())
+
     fn append_user(mut self, content: String):
         self.messages.append(SessionMessage("user", content))
 

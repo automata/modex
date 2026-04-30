@@ -1,5 +1,5 @@
 from collections import List
-from llm import OpenRouter, OpenRouterChunk, OpenRouterToolSpec, SessionHistory, assemble_tool_calls
+from llm import OpenRouter, OpenRouterChunk, OpenRouterToolSpec, SessionHistory
 
 fn on_chunk(_chunk: OpenRouterChunk):
     pass
@@ -8,8 +8,8 @@ fn main() raises:
     var client = OpenRouter.from_env()
 
     # Tool definitions are provider-side only for now. This experiment shows
-    # how to send tool schemas, parse streamed tool-call deltas, and assemble
-    # complete tool calls from partial chunks.
+    # how to send tool schemas and receive a structured assistant message with
+    # assembled tool calls.
     var tools = List[OpenRouterToolSpec]()
     tools.append(
         OpenRouterToolSpec(
@@ -28,26 +28,15 @@ fn main() raises:
 
     var history = SessionHistory()
     history.append_user("Use the read tool to inspect README.md. Do not answer normally. If the file exists, call the tool.")
-    var chunks = client.create("openai/gpt-4o-mini", history, on_chunk, tools)
+    var message = client.create("openai/gpt-4o-mini", history, on_chunk, tools)
 
-    print("Streamed chunks:", len(chunks))
-    print()
-
-    for chunk in chunks:
-        if len(chunk.delta) > 0:
-            print("text delta:", chunk.delta)
-        if chunk.has_tool_call():
-            print("tool delta:")
-            print("  index:", chunk.tool_call_index)
-            print("  id:", chunk.tool_call_id)
-            print("  name:", chunk.tool_call_name)
-            print("  arguments delta:", chunk.tool_call_arguments)
-        if len(chunk.finish_reason) > 0:
-            print("finish reason:", chunk.finish_reason)
+    print("Assistant role:", message.role)
+    if len(message.content) > 0:
+        print("Content:", message.content)
 
     print()
-    print("Assembled tool calls:")
-    var calls = assemble_tool_calls(chunks)
+    print("Tool calls:")
+    var calls = message.tool_calls
     if len(calls) == 0:
         print("  (no tool calls returned by model)")
         print("  Tip: try a different model if this one chose not to call tools.")

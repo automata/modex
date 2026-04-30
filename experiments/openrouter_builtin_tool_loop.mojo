@@ -1,5 +1,5 @@
 from collections import List
-from llm import OpenRouter, OpenRouterChunk, OpenRouterToolSpec, SessionHistory, assemble_tool_calls
+from llm import OpenRouter, OpenRouterChunk, OpenRouterToolSpec, SessionHistory
 from tools import builtin_tool_definitions, execute_builtin_tool
 
 fn on_chunk(chunk: OpenRouterChunk):
@@ -10,13 +10,6 @@ fn tool_schemas() -> List[OpenRouterToolSpec]:
     for tool in builtin_tool_definitions():
         specs.append(OpenRouterToolSpec(tool.name, tool.description, tool.parameters_json_schema))
     return specs^
-
-fn concat_text_deltas(chunks: List[OpenRouterChunk]) -> String:
-    var out = String()
-    for chunk in chunks:
-        if len(chunk.delta) > 0:
-            out += chunk.delta
-    return out
 
 fn execute_tool_call(name: String, arguments: String) -> String:
     try:
@@ -32,15 +25,14 @@ fn main() raises:
     var tools = tool_schemas()
 
     for _turn in range(6):
-        var chunks = client.create("openai/gpt-4o-mini", history, on_chunk, tools)
-        var calls = assemble_tool_calls(chunks)
+        var message = client.create("openai/gpt-4o-mini", history, on_chunk, tools)
 
-        if len(calls) == 0:
-            print(concat_text_deltas(chunks))
+        if len(message.tool_calls) == 0:
+            print(message.content)
             return
 
-        history.append_assistant_tool_calls(calls)
-        for call in calls:
+        history.append_message(message)
+        for call in message.tool_calls:
             history.append_tool_result(call.id, execute_tool_call(call.function_name, call.arguments))
 
     raise Error("tool loop exceeded max turns")

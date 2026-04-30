@@ -6,7 +6,6 @@ Environment:
     OPENROUTER_API_KEY
 
 Example:
-    from collections import List
     from llm import OpenRouter, SessionHistory
 
     fn on_chunk(chunk):
@@ -16,7 +15,9 @@ Example:
         var client = OpenRouter.from_env()
         var history = SessionHistory()
         history.append_user("Say hello")
-        _ = client.create("openai/gpt-4o-mini", history, on_chunk)
+        var message = client.create("openai/gpt-4o-mini", history, on_chunk)
+        if len(message.tool_calls) == 0:
+            print("\nfinal:", message.content)
 """
 
 from collections import List
@@ -127,16 +128,17 @@ struct OpenRouter:
         history: SessionHistory,
         on_chunk: fn(OpenRouterChunk) -> NoneType,
         tools: List[OpenRouterToolSpec] = List[OpenRouterToolSpec](),
-    ) raises -> List[OpenRouterChunk]:
+    ) raises -> SessionMessage:
         """Create one streamed assistant turn from existing session history.
 
         The caller owns tool definitions, tool execution, and any multi-turn
-        orchestration. This method only sends the current history and optional
-        tool schemas to OpenRouter, streams chunks via `on_chunk`, and returns
-        the collected chunks for further processing.
+        orchestration. This method sends the current history and optional tool
+        schemas to OpenRouter, streams chunks via `on_chunk`, and returns a
+        structured assistant message with either `content` or `tool_calls`.
         """
         var payload = self._build_payload_from_history(model, history, tools)
-        return self._stream_payload_collect(payload, on_chunk)
+        var chunks = self._stream_payload_collect(payload, on_chunk)
+        return _assistant_message_from_chunks(chunks)
 
     fn stream_messages(
         self,
@@ -518,12 +520,7 @@ struct OpenRouter:
         return out^
 
 
-fn assemble_tool_calls(chunks: List[OpenRouterChunk]) -> List[OpenRouterToolCall]:
-    """Assemble full tool calls from streamed OpenRouter chunks.
-
-    OpenAI-compatible streaming sends tool calls in partial deltas keyed by
-    `index`. This helper merges all deltas into complete tool calls.
-    """
+fn _assemble_tool_calls(chunks: List[OpenRouterChunk]) -> List[OpenRouterToolCall]:
     var calls = List[OpenRouterToolCall]()
 
     for chunk in chunks:
@@ -552,6 +549,18 @@ fn assemble_tool_calls(chunks: List[OpenRouterChunk]) -> List[OpenRouterToolCall
             )
 
     return calls^
+
+
+fn _assistant_message_from_chunks(chunks: List[OpenRouterChunk]) -> SessionMessage:
+    var content = String()
+    for chunk in chunks:
+        if len(chunk.delta) > 0:
+            content += chunk.delta
+
+    var tool_calls = _assemble_tool_calls(chunks)
+    if len(tool_calls) > 0:
+        return SessionMessage("assistant", content, "", tool_calls)
+    return SessionMessage("assistant", content)
 
 
 fn _tool_call_to_json(call: OpenRouterToolCall) -> String:
