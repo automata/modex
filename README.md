@@ -3,6 +3,8 @@
 A Mojo-based AI coding harness — a terminal coding agent inspired by
 [pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent).
 
+![Modex screenshot](./docs/modex.jpg)
+
 ## Prerequisites
 
 - **Linux x86_64** (other platforms: adjust `platforms` in
