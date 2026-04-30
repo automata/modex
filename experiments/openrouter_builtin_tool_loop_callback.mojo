@@ -3,13 +3,17 @@ from llm import OpenRouter, OpenRouterChunk, OpenRouterToolSpec, SessionHistory,
 from tools import builtin_tool_definitions, execute_builtin_tool
 
 fn on_chunk(chunk: OpenRouterChunk):
-    pass
+    if len(chunk.delta) > 0:
+        print(chunk.delta, end="")
+    elif chunk.has_tool_call():
+        print("\n[tool call] ", chunk.tool_call_name, " ", chunk.tool_call_arguments, sep="")
+    elif len(chunk.finish_reason) > 0:
+        print("\n[finish reason] ", chunk.finish_reason, sep="")
 
-fn read_tool_schema() -> List[OpenRouterToolSpec]:
+fn tool_schemas() -> List[OpenRouterToolSpec]:
     var specs = List[OpenRouterToolSpec]()
     for tool in builtin_tool_definitions():
-        if tool.name == "read":
-            specs.append(OpenRouterToolSpec(tool.name, tool.description, tool.parameters_json_schema))
+        specs.append(OpenRouterToolSpec(tool.name, tool.description, tool.parameters_json_schema))
     return specs^
 
 fn concat_text_deltas(chunks: List[OpenRouterChunk]) -> String:
@@ -28,16 +32,16 @@ fn execute_tool_call(name: String, arguments: String) -> String:
 fn main() raises:
     var client = OpenRouter.from_env()
     var history = SessionHistory()
-    history.append_user("Read README.md with the read tool, then summarize what modex is in 2-3 sentences.")
+    history.append_user("Read README.md using the available tools, then summarize modex in 2-3 sentences.")
 
-    var tools = read_tool_schema()
+    var tools = tool_schemas()
 
-    for _turn in range(4):
+    for _turn in range(6):
         var chunks = client.create("openai/gpt-4o-mini", history, on_chunk, tools)
         var calls = assemble_tool_calls(chunks)
 
         if len(calls) == 0:
-            print(concat_text_deltas(chunks))
+            print("\n\nFinal answer:\n" + concat_text_deltas(chunks))
             return
 
         history.append_assistant_tool_calls(calls)

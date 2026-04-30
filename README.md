@@ -136,7 +136,7 @@ modex/
 │   ├── llm/                  # LLM provider clients + shared history/types
 │   │   ├── __init__.mojo
 │   │   ├── history.mojo      # SessionHistory / SessionMessage
-│   │   ├── openrouter.mojo   # OpenRouter streaming + tool loops
+│   │   ├── openrouter.mojo   # OpenRouter streaming + tool-call primitives
 │   │   └── types.mojo        # Shared provider structs
 │   ├── style/                # Minimal ANSI styling helpers for CLI output
 │   └── tools/                # Built-in tool definitions + execution

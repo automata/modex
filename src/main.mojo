@@ -1,8 +1,10 @@
+from collections import List
 from io.io import _fdopen
-from llm import OpenRouterChunk, OpenRouterClient
+from llm import OpenRouterChunk, OpenRouter, OpenRouterToolSpec, SessionHistory, assemble_tool_calls
 from os import getenv
 from style import ansi_cyan, ansi_dim, ansi_green, ansi_magenta, ansi_yellow, style
 from sys import stdin
+from tools import builtin_tool_definitions, execute_builtin_tool
 
 
 fn system_prompt() -> String:
@@ -50,6 +52,57 @@ fn _read_prompt() raises -> String:
     return _fdopen["r"](stdin).readline()
 
 
+fn _default_tool_schemas() -> List[OpenRouterToolSpec]:
+    var specs = List[OpenRouterToolSpec]()
+    for tool in builtin_tool_definitions():
+        specs.append(OpenRouterToolSpec(tool.name, tool.description, tool.parameters_json_schema))
+    return specs^
+
+
+fn _concat_text_deltas(chunks: List[OpenRouterChunk]) -> String:
+    var out = String()
+    for chunk in chunks:
+        if len(chunk.delta) > 0:
+            out += chunk.delta
+    return out
+
+
+fn _execute_tool_call(name: String, arguments: String) -> String:
+    try:
+        return execute_builtin_tool(name, arguments)
+    except e:
+        return "Error executing tool '" + name + "': " + String(e)
+
+
+fn _run_turn_loop(
+    client: OpenRouter,
+    model: String,
+    prompt: String,
+    on_chunk: fn(OpenRouterChunk) -> NoneType,
+    max_turns: Int = 6,
+) raises -> String:
+    var history = SessionHistory()
+    history.append_system(system_prompt())
+    history.append_user(prompt)
+
+    var tools = _default_tool_schemas()
+
+    for _turn in range(max_turns):
+        var chunks = client.create(model, history, on_chunk, tools)
+        var calls = assemble_tool_calls(chunks)
+
+        if len(calls) == 0:
+            return _concat_text_deltas(chunks)
+
+        history.append_assistant_tool_calls(calls)
+
+        for call in calls:
+            var tool_result = _execute_tool_call(call.function_name, call.arguments)
+            history.append_tool_result(call.id, tool_result)
+
+    raise Error("tool loop exceeded max_turns without a final response")
+
+
 fn main() raises:
     var model = getenv("OPENROUTER_MODEL")
     if len(model) == 0:
@@ -57,7 +110,7 @@ fn main() raises:
 
     _print_banner(model)
 
-    var client = OpenRouterClient.from_env()
+    var client = OpenRouter.from_env()
 
     while True:
         print(style("\n\n> ", ansi_green(), bold=True), end="")
@@ -77,9 +130,4 @@ fn main() raises:
             break
 
         print()
-        _ = client.run_with_default_builtin_tools_live(
-            model,
-            prompt,
-            on_chunk,
-            system_prompt=system_prompt(),
-        )
+        _ = _run_turn_loop(client, model, prompt, on_chunk)

@@ -1,8 +1,11 @@
 from collections import List
-from llm import OpenRouterClient, OpenRouterToolSpec, assemble_tool_calls
+from llm import OpenRouter, OpenRouterChunk, OpenRouterToolSpec, SessionHistory, assemble_tool_calls
+
+fn on_chunk(_chunk: OpenRouterChunk):
+    pass
 
 fn main() raises:
-    var client = OpenRouterClient.from_env()
+    var client = OpenRouter.from_env()
 
     # Tool definitions are provider-side only for now. This experiment shows
     # how to send tool schemas, parse streamed tool-call deltas, and assemble
@@ -23,11 +26,9 @@ fn main() raises:
         )
     )
 
-    var chunks = client.stream_text_with_tools(
-        "openai/gpt-4o-mini",
-        "Use the read tool to inspect README.md. Do not answer normally. If the file exists, call the tool.",
-        tools,
-    )
+    var history = SessionHistory()
+    history.append_user("Use the read tool to inspect README.md. Do not answer normally. If the file exists, call the tool.")
+    var chunks = client.create("openai/gpt-4o-mini", history, on_chunk, tools)
 
     print("Streamed chunks:", len(chunks))
     print()

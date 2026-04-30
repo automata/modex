@@ -57,18 +57,18 @@ Pi's architecture breaks into these layers. modex mirrors them:
   - [x] Streaming responses over SSE
   - [x] Text delta parsing
   - [x] Tool-call delta parsing
-  - [x] Live callback streaming
+  - [x] Callback streaming
 - [x] **API key management** — Reads from env vars (`OPENROUTER_API_KEY`)
 - [ ] **Model definitions** — Minimal model handling exists (pass model ID string), but no full model registry/metadata structs yet
 - [x] **SSE parser** — Implemented in `libs/sse/`
 - [x] **Chunked transfer decoding** — Implemented in `libs/http_client/`
   - [x] Shared chunked decoding extracted to `libs/http_client/chunked.mojo`
-  - [x] Buffered and streaming paths now use the same implementation
+  - [x] Shared chunked decoding used across the streaming implementation
   - [x] Decoder made tolerant of both `\r\n` and bare `\n` in chunk framing
 
 ### Deliverable
 
-A CLI/experiment can send a prompt through OpenRouter and stream the response to stdout. This is working today (`experiments/openrouter_stream.mojo`, `experiments/openrouter_stream_live.mojo`).
+A CLI/experiment can send a prompt through OpenRouter and stream the response to stdout. This is working today (`experiments/openrouter_stream.mojo`, `experiments/openrouter_stream_callback.mojo`).
 
 ---
 
@@ -107,16 +107,13 @@ A CLI/experiment can send a prompt through OpenRouter and stream the response to
   - [x] Stdout/stderr capture
   - [x] Timeout support
   - [x] Output truncation
-- [x] **Tool execution loop** — Implemented in `OpenRouterClient`
-  - [x] `run_with_read_tool(...)`
-  - [x] `run_with_builtin_tools(...)`
-  - [x] `run_with_builtin_tools_live(...)`
+- [x] **App-level tool execution loop** — current REPL in `src/main.mojo` orchestrates tool execution using `OpenRouter.create(...)`
 - [ ] **System prompt** — Default reusable system prompt layer still needed
 - [ ] **Tool safety / sandboxing** — Path restrictions, permission model, safer write/edit semantics still needed
 
 ### Deliverable
 
-A CLI/experiment where you can ask the LLM to read files, write code, run commands, and complete a multi-turn tool loop. Current state: this works in experiments, but still needs safety controls and a cleaner provider-agnostic agent abstraction.
+A CLI/experiment where you can ask the LLM to read files, write code, run commands, and complete a multi-turn tool loop. Current state: this works, with provider streaming/tool-call support in `libs/llm/openrouter.mojo` and app-owned tool orchestration in `src/main.mojo`, but still needs safety controls and a cleaner provider-agnostic agent abstraction.
 
 ---
 
@@ -172,11 +169,11 @@ A usable coding-agent loop with basic safety boundaries suitable for wider inter
 
 ## Milestone 5: Agent Core Extraction
 
-**Recommended after safety work.** The current multi-turn loop lives inside `OpenRouterClient`; extract it into a provider-agnostic agent/session layer once persistence and safety needs are clearer.
+**Recommended after safety work.** The current multi-turn loop lives at the app layer (`src/main.mojo`) on top of `OpenRouter`; extract it into a provider-agnostic agent/session layer once persistence and safety needs are clearer.
 
 ### Tasks
 
-- [ ] **Provider-agnostic agent loop** — Move prompt/tool/result orchestration out of `OpenRouterClient`
+- [ ] **Provider-agnostic agent loop** — Extract prompt/tool/result orchestration from app code into a reusable agent layer
 - [ ] **Generic message/session model** — Reuse `SessionHistory` as the core conversation abstraction
 - [ ] **Tool registry abstraction** — Go beyond the current built-in dispatcher
 - [ ] **Agent events/hooks** — Turn start/end, tool call/result, stream events
@@ -347,14 +344,14 @@ LLM APIs stream via Server-Sent Events.
 - [x] Chunked HTTP response reading (incremental)
 - [x] Line-by-line event parsing (`libs/sse/`)
 - [x] Buffered SSE collection (`HttpClient.get_sse()` / `post_sse()`)
-- [x] Live callback streaming in `OpenRouterClient`
+- [x] Callback streaming in `OpenRouter`
 - [ ] Token-by-token display in a TUI
 
 ### 5. TLS/HTTPS
 
 - [x] OpenSSL `libssl` / `libcrypto` FFI implemented
 - [x] HTTPS requests working against OpenRouter and other hosts
-- [x] Shared chunked transfer decoding extracted and used by both buffered + live streaming paths
+- [x] Shared chunked transfer decoding extracted and used by streaming paths
 - [ ] Proper IPv6 + multi-address fallback (currently forced to IPv4 because socket layer only supports `sockaddr_in`)
 
 ---
@@ -399,7 +396,7 @@ modex/
 │   ├── llm/                         # ✅ substantially implemented
 │   │   ├── __init__.mojo            #    Exports: OpenRouter client, history, shared types
 │   │   ├── history.mojo             #    SessionHistory / SessionMessage abstraction
-│   │   ├── openrouter.mojo          #    OpenRouter streaming client + tool loop
+│   │   ├── openrouter.mojo          #    OpenRouter streaming client + tool-call primitives
 │   │   └── types.mojo               #    Shared LLM/provider structs
 │   │
 │   ├── style/                       # ✅ implemented (minimal ANSI styling helpers)
@@ -419,10 +416,10 @@ modex/
 │   ├── http_client.mojo             #    Python interop HTTP client
 │   ├── http_client_native.mojo      #    Native libc socket HTTP client
 │   ├── openrouter_builtin_tool_loop.mojo       # Generic built-in tool loop
-│   ├── openrouter_builtin_tool_loop_live.mojo  # Live generic built-in tool loop
+│   ├── openrouter_builtin_tool_loop_callback.mojo  # Callback generic built-in tool loop
 │   ├── openrouter_read_tool_loop.mojo          # Minimal read-tool loop
-│   ├── openrouter_stream.mojo       #    Buffered OpenRouter streaming
-│   ├── openrouter_stream_live.mojo  #    Live callback OpenRouter streaming
+│   ├── openrouter_stream.mojo       #    Collected OpenRouter streaming
+│   ├── openrouter_stream_callback.mojo  #    Callback-based OpenRouter streaming
 │   ├── openrouter_tool_calls.mojo   #    Streamed tool-call parsing demo
 │   └── sse_parser.mojo              #    Standalone SSE parser demo
 │
@@ -491,14 +488,14 @@ This is now largely achieved in experiment form and a minimal stdin/stdout REPL 
 2. **~~Python interop overhead~~** — Negligible for network I/O. Native libc FFI also works (proven in experiments).
 3. **~~Project structure~~** — `libs/` for extractable packages, `src/` for modex app. Each lib is self-contained with `__init__.mojo`.
 4. **~~TLS/HTTPS~~** — Implemented via OpenSSL FFI in `libs/http_client/tls.mojo`.
-5. **~~Initial provider~~** — OpenRouter implemented first, including live streaming and tool-call parsing.
+5. **~~Initial provider~~** — OpenRouter implemented first, including streaming and tool-call parsing.
 6. **~~Structured conversation abstraction~~** — `SessionHistory` / `SessionMessage` implemented and used by tool loops.
 7. **~~Native JSON~~** — `libs/json/` implemented and wired into provider/tool parsing and serialization.
 8. **~~Minimal CLI styling layer~~** — `libs/style/` extracted for reusable ANSI terminal styling helpers.
 
 ## Open Questions
 
-1. **Agent core extraction** — When should the current OpenRouter-specific tool loop move into a provider-agnostic agent/session layer?
+1. **Agent core extraction** — When should the current app-level tool loop move into a provider-agnostic agent/session layer?
 2. **Persistent session format** — Should session files be compatible with pi? Same tree/message schema?
 3. **Extension model** — Should extensions be Python scripts, compiled Mojo packages, or IPC-based plugins?
 4. **Licensing** — MIT to match pi?
