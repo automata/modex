@@ -8,7 +8,7 @@ version = "0.1.0"
 [tasks]
 run = "mojo run -I libs src/main.mojo"
 build = "mojo build -I libs src/main.mojo -o modex"
-test = "mojo test -I libs tests/"
+test = "mojo run -I libs tests/main.mojo"
 
 [dependencies]
 max = "*"

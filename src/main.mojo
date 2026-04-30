@@ -1,7 +1,8 @@
+from io.io import _fdopen
 from llm import OpenRouterChunk, OpenRouterClient
 from os import getenv
-from python import Python
 from style import ansi_cyan, ansi_dim, ansi_green, ansi_magenta, ansi_yellow, style
+from sys import stdin
 
 
 fn system_prompt() -> String:
@@ -45,6 +46,10 @@ fn _print_banner(model: String):
     print(style("Commands:", ansi_cyan(), bold=True), "/exit, /quit")
 
 
+fn _read_prompt() raises -> String:
+    return _fdopen["r"](stdin).readline()
+
+
 fn main() raises:
     var model = getenv("OPENROUTER_MODEL")
     if len(model) == 0:
@@ -53,10 +58,18 @@ fn main() raises:
     _print_banner(model)
 
     var client = OpenRouterClient.from_env()
-    var py_builtins = Python.import_module("builtins")
 
     while True:
-        var prompt = String(py_builtins.input(style("\n\n> ", ansi_green(), bold=True)))
+        print(style("\n\n> ", ansi_green(), bold=True), end="")
+
+        var prompt: String
+        try:
+            prompt = _read_prompt()
+        except e:
+            print()
+            print(style("bye", dim=True))
+            break
+
         if len(prompt) == 0:
             continue
         if prompt == "/exit" or prompt == "/quit":

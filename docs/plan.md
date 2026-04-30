@@ -426,8 +426,7 @@ modex/
 │   ├── openrouter_tool_calls.mojo   #    Streamed tool-call parsing demo
 │   └── sse_parser.mojo              #    Standalone SSE parser demo
 │
-└── tests/                           # Tests (pixi run test)
-    # tests not implemented yet
+└── tests/                           # Lightweight test runner + test modules
 ```
 
 ### What lives in `src/` vs `libs/`
