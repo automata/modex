@@ -1,6 +1,6 @@
 from collections import List
 from io.io import _fdopen
-from llm import OpenRouterChunk, OpenRouter, OpenRouterToolSpec, SessionHistory, assemble_tool_calls
+from llm import OpenRouterChunk, OpenRouter, OpenRouterToolSpec, SessionHistory
 from os import getenv
 from style import ansi_cyan, ansi_dim, ansi_green, ansi_magenta, ansi_yellow, style
 from sys import stdin
@@ -59,14 +59,6 @@ fn _default_tool_schemas() -> List[OpenRouterToolSpec]:
     return specs^
 
 
-fn _concat_text_deltas(chunks: List[OpenRouterChunk]) -> String:
-    var out = String()
-    for chunk in chunks:
-        if len(chunk.delta) > 0:
-            out += chunk.delta
-    return out
-
-
 fn _execute_tool_call(name: String, arguments: String) -> String:
     try:
         return execute_builtin_tool(name, arguments)
@@ -88,15 +80,15 @@ fn _run_turn_loop(
     var tools = _default_tool_schemas()
 
     for _turn in range(max_turns):
-        var chunks = client.create(model, history, on_chunk, tools)
-        var calls = assemble_tool_calls(chunks)
+        var message = client.create(model, history, on_chunk, tools)
 
-        if len(calls) == 0:
-            return _concat_text_deltas(chunks)
+        if len(message.tool_calls) == 0:
+            history.append_message(message)
+            return message.content
 
-        history.append_assistant_tool_calls(calls)
+        history.append_message(message)
 
-        for call in calls:
+        for call in message.tool_calls:
             var tool_result = _execute_tool_call(call.function_name, call.arguments)
             history.append_tool_result(call.id, tool_result)
 

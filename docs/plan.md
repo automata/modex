@@ -94,7 +94,7 @@ A CLI/experiment can send a prompt through OpenRouter and stream the response to
 
 - [x] **Provider-side tool definitions** — `OpenRouterToolSpec` implemented and sent in provider payloads
 - [x] **Provider-side tool-call parsing** — Streamed tool call deltas are parsed from OpenRouter SSE frames
-- [x] **Tool-call assembly** — `assemble_tool_calls(...)` reconstructs full tool calls from streamed partial deltas
+- [x] **Tool-call assembly** — streamed partial tool-call deltas are internally reconstructed into structured assistant messages with `tool_calls`
 - [x] **Tool: `read`** — Implemented in `libs/tools/read.mojo`
   - [x] Path resolution relative to cwd
   - [x] Line offset/limit support
@@ -396,7 +396,7 @@ modex/
 │   ├── llm/                         # ✅ substantially implemented
 │   │   ├── __init__.mojo            #    Exports: OpenRouter client, history, shared types
 │   │   ├── history.mojo             #    SessionHistory / SessionMessage abstraction
-│   │   ├── openrouter.mojo          #    OpenRouter streaming client + tool-call primitives
+│   │   ├── openrouter.mojo          #    OpenRouter streaming client + structured assistant messages/tool calls
 │   │   └── types.mojo               #    Shared LLM/provider structs
 │   │
 │   ├── style/                       # ✅ implemented (minimal ANSI styling helpers)
